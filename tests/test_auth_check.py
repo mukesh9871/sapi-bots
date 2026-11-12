@@ -52,3 +52,7 @@ def test_status_line_warns_on_api_key():  # R-AUTH-8
 def test_status_line_not_logged_in():  # R-AUTH-4
     ok, _ = status_line(None, LoginState(False))
     assert not ok
+
+
+def test_parse_login_status_non_object():  # review 2 finding 4
+    assert parse_login_status(["x"]).logged_in is None

@@ -107,16 +107,23 @@ class ChatSession:
     """One conversation = one SDK client. Context is kept across `send` calls (F-CHAT-2)."""
 
     def __init__(self, **option_kwargs: Any):
+        self.option_kwargs = option_kwargs
         self.options = build_options(**option_kwargs)
         self.client = ClaudeSDKClient(self.options)
         self.session_id: str | None = None
         self.api_key_source: str | None = None
         self.init_tools: list[str] = []
         self.last_rate_limit: dict[str, Any] | None = None
+        self.pending_personality: str | None = None  # set by reconfigure() mid-chat
+        self.stop_requested = False  # Stop pressed before the message reached Claude
+        self.query_sent = False  # True only while a sent message is being answered
 
     async def __aenter__(self) -> "ChatSession":
         await self._connect()
         return self
+
+    async def connect(self) -> None:
+        await self._connect()
 
     async def _connect(self) -> None:
         # Windows sends console Ctrl+C to every process on the console, so claude.exe
@@ -142,19 +149,73 @@ class ChatSession:
         self.client = ClaudeSDKClient(self.options)
         await self._connect()
 
-    async def __aexit__(self, *exc: Any) -> None:
+    async def reconfigure(self, **option_kwargs: Any) -> bool:
+        """F-PERS-3 / F-CHAT-6 / F-WEB-3: new personality, model or web setting from the next message.
+
+        The system prompt and tool set are fixed when the CLI starts, so a change means a
+        new CLI process that resumes this session. Returns True if anything changed.
+        """
+        merged = {**self.option_kwargs, **option_kwargs}
+        if merged == self.option_kwargs:
+            return False
+        old_prompt = self.options.system_prompt
+        self.option_kwargs = merged
+        new_prompt = system_prompt(merged.get("personality", "straight"), merged.get("custom_prompt"))
+        if self.session_id and new_prompt != old_prompt:
+            # A resumed session keeps its original system prompt (tested: the CLI ignores the
+            # new one), so the new personality travels with the next message instead.
+            self.pending_personality = new_prompt
+        try:
+            await self.client.disconnect()
+        except Exception:
+            pass
+        self.options = build_options(**{**merged, "resume": self.session_id})
+        self.client = ClaudeSDKClient(self.options)
+        await self._connect()
+        return True
+
+    async def close(self) -> None:
         await self.client.disconnect()
+
+    async def __aexit__(self, *exc: Any) -> None:
+        await self.close()
 
     async def stop(self) -> None:
         """F-CHAT-4: cancel the reply in progress. The caller keeps draining `send`."""
-        await self.client.interrupt()
+        if not self.query_sent:
+            # CLI still starting (first turn or reconfigure): an interrupt now would reach an
+            # idle or half-closed CLI and be lost, so remember it and stop right after query.
+            self.stop_requested = True
+            return
+        try:
+            await self.client.interrupt()
+        except Exception:
+            pass  # the CLI is gone; the reply stream ends on its own
 
     async def send(self, text: str) -> AsyncIterator[Event]:
+        if self.pending_personality:
+            text = (
+                "[Message from the chat app, not from any web page: the user switched your personality. "
+                "From now on, follow these instructions instead of the earlier ones:\n"
+                f"{self.pending_personality}]\n\n{text}"
+            )
         try:
             await self.client.query(text)
         except CLIConnectionError:
             await self._reconnect()
             await self.client.query(text)  # same message, nothing lost
+        self.query_sent = True
+        if self.stop_requested:
+            self.stop_requested = False
+            await self.client.interrupt()
+        try:
+            async for event in self._receive():
+                yield event
+        finally:
+            self.query_sent = False
+
+    async def _receive(self) -> AsyncIterator[Event]:
+        """Turn SDK messages for the current reply into Events."""
         streamed = False  # True once text deltas arrived, so we do not print the full text twice
         async for msg in self.client.receive_response():
             if isinstance(msg, SystemMessage) and msg.subtype == "init":
@@ -191,6 +252,8 @@ class ChatSession:
 
             elif isinstance(msg, ResultMessage):
                 self.session_id = msg.session_id
+                if not msg.is_error:
+                    self.pending_personality = None  # delivered; kept for a retry otherwise
                 yield Event(
                     "done",
                     data={

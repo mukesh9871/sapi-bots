@@ -1,0 +1,73 @@
+/* Light and dark theme follow the system setting (N-USE-2). */
+:root {
+  --bg: #f7f7f8; --panel: #ffffff; --text: #1d1d1f; --muted: #6b6b72; --border: #e2e2e6;
+  --accent: #2f6fed; --accent-text: #fff; --user: #e8effd; --danger: #c93838;
+  --ok: #1f8a4c; --code-bg: #f3f3f5;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #17171a; --panel: #202024; --text: #ececf1; --muted: #9a9aa3; --border: #34343a;
+    --accent: #5b8cff; --accent-text: #fff; --user: #26324d; --danger: #ff6b6b;
+    --ok: #46c27a; --code-bg: #15151a;
+    color-scheme: dark;
+  }
+}
+
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body { background: var(--bg); color: var(--text); font: 15px/1.55 system-ui, "Segoe UI", sans-serif; }
+#app { display: flex; flex-direction: column; height: 100%; max-width: 980px; margin: 0 auto; padding: 0 16px; }
+
+button, select, textarea, input { font: inherit; color: inherit; }
+button { background: var(--accent); color: var(--accent-text); border: 0; border-radius: 8px; padding: 6px 14px; cursor: pointer; }
+button.ghost { background: transparent; color: var(--text); border: 1px solid var(--border); }
+button.danger { background: var(--danger); }
+button:disabled { opacity: .5; cursor: default; }
+select { background: var(--panel); border: 1px solid var(--border); border-radius: 6px; padding: 3px 6px; }
+
+/* top bar */
+.topbar { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; justify-content: space-between;
+  padding: 12px 0; border-bottom: 1px solid var(--border); }
+.title { font-weight: 600; font-size: 16px; }
+.controls { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; color: var(--muted); font-size: 14px; }
+.controls label { display: flex; gap: 6px; align-items: center; }
+
+/* messages */
+#messages { flex: 1; overflow-y: auto; padding: 16px 0; display: flex; flex-direction: column; gap: 14px; }
+.empty { margin: auto; color: var(--muted); }
+.msg { max-width: 85%; padding: 10px 14px; border-radius: 12px; overflow-wrap: anywhere; }
+.msg.user { align-self: flex-end; background: var(--user); white-space: pre-wrap; }
+.msg.bot { align-self: flex-start; background: var(--panel); border: 1px solid var(--border); width: 85%; }
+.msg .who { font-size: 12px; color: var(--muted); margin-bottom: 4px; display: flex; justify-content: space-between; align-items: center; }
+.msg .who button { padding: 1px 8px; font-size: 12px; }
+.msg .body > :first-child { margin-top: 0; }
+.msg .body > :last-child { margin-bottom: 0; }
+.msg .note { color: var(--muted); font-style: italic; font-size: 13px; margin-top: 6px; }
+.msg .error { color: var(--danger); margin-top: 8px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; white-space: pre-wrap; }
+.msg a { color: var(--accent); }
+.msg table { border-collapse: collapse; display: block; overflow-x: auto; }
+.msg th, .msg td { border: 1px solid var(--border); padding: 4px 8px; }
+.msg code { background: var(--code-bg); padding: 1px 4px; border-radius: 4px; font-size: 13.5px; }
+.msg pre { position: relative; background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; overflow-x: auto; }
+.msg pre code { background: none; padding: 0; }
+.msg pre code.hljs { background: none; padding: 0; }
+.msg pre .copy-code { position: absolute; top: 6px; right: 6px; padding: 1px 8px; font-size: 12px; opacity: .8; }
+
+/* composer */
+.bottom { padding: 8px 0 12px; border-top: 1px solid var(--border); }
+.activity { color: var(--muted); font-size: 13px; padding: 0 0 6px; }
+#composer { display: flex; gap: 8px; align-items: flex-end; }
+#input { flex: 1; resize: none; max-height: 40vh; padding: 9px 12px; border-radius: 10px; border: 1px solid var(--border); background: var(--panel); }
+.status { font-size: 12.5px; margin-top: 6px; color: var(--muted); white-space: pre-wrap; }
+.status.ok { color: var(--ok); }
+.status.bad { color: var(--danger); font-weight: 600; }
+.notices { font-size: 12.5px; margin-top: 6px; color: var(--danger); }
+
+/* custom prompt dialog */
+dialog { background: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: 12px; width: min(640px, 92vw); }
+dialog::backdrop { background: rgba(0,0,0,.4); }
+dialog h2 { margin: 0 0 4px; font-size: 17px; }
+dialog .hint { color: var(--muted); margin: 0 0 10px; font-size: 13px; }
+dialog textarea { width: 100%; padding: 8px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg); }
+dialog menu { display: flex; justify-content: flex-end; gap: 8px; padding: 0; margin: 12px 0 0; }

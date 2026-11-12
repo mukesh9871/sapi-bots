@@ -89,6 +89,8 @@ def check_login(cli: str | None = None, timeout: float = 20) -> LoginState:
 
 def parse_login_status(data: dict) -> LoginState:
     # Deliberately ignore email, org id and anything else personal.
+    if not isinstance(data, dict):
+        return LoginState(None, detail="Unexpected login status output.")
     return LoginState(
         logged_in=bool(data.get("loggedIn")),
         auth_method=data.get("authMethod"),

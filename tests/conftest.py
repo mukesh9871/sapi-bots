@@ -3,3 +3,4 @@ from pathlib import Path
 
 # Make `import hub` work when pytest runs from the project root.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # tests/helpers importable

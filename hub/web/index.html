@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Hub</title>
+  <link rel="stylesheet" href="/static/app.css">
+  <link rel="stylesheet" href="/static/vendor/hljs-light.css" media="(prefers-color-scheme: light)">
+  <link rel="stylesheet" href="/static/vendor/hljs-dark.css" media="(prefers-color-scheme: dark)">
+</head>
+<body>
+  <div id="app">
+    <header class="topbar">
+      <div class="title" id="chat-title">New chat</div>
+      <div class="controls">
+        <label>Personality
+          <select id="personality"></select>
+        </label>
+        <button type="button" id="edit-custom" class="ghost" hidden>Edit prompt</button>
+        <label>Model
+          <select id="model">
+            <option value="">Plan default</option>
+            <option value="haiku">Haiku (fast)</option>
+            <option value="sonnet">Sonnet</option>
+            <option value="opus">Opus (strongest)</option>
+          </select>
+        </label>
+        <label class="toggle"><input type="checkbox" id="web"> Web search</label>
+        <button type="button" id="new-chat" class="ghost">New chat</button>
+      </div>
+    </header>
+
+    <main id="messages" aria-live="polite">
+      <div class="empty" id="empty">Ask me anything.</div>
+    </main>
+
+    <footer class="bottom">
+      <div id="activity" class="activity" hidden></div>
+      <form id="composer">
+        <textarea id="input" rows="1" placeholder="Message (Enter sends, Shift+Enter new line)" autofocus></textarea>
+        <button type="submit" id="send">Send</button>
+        <button type="button" id="stop" class="danger" hidden>Stop</button>
+      </form>
+      <div id="notices" class="notices" hidden></div>
+      <div id="status" class="status">Checking sign-in…</div>
+    </footer>
+  </div>
+
+  <dialog id="custom-dialog">
+    <form method="dialog">
+      <h2>Custom personality</h2>
+      <p class="hint">Write how the bot should behave. Saved for reuse.</p>
+      <textarea id="custom-text" rows="10"></textarea>
+      <menu>
+        <button value="cancel" class="ghost">Cancel</button>
+        <button value="save" id="custom-save">Save</button>
+      </menu>
+    </form>
+  </dialog>
+
+  <script src="/static/vendor/marked.min.js"></script>
+  <script src="/static/vendor/purify.min.js"></script>
+  <script src="/static/vendor/highlight.min.js"></script>
+  <script src="/static/app.js"></script>
+</body>
+</html>

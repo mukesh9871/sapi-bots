@@ -69,3 +69,25 @@ tests/
   `docs/REQUIREMENTS.md`. Mention the ID in commits and code comments.
 - Ask me before adding a dependency that is not listed above.
 - Never commit `data/`, `projects/`, `config.json` or anything with secrets.
+
+## Workflow for every milestone (follow every step, in order)
+
+1. **Understand:** read the milestone and every requirement ID it touches in
+   `docs/REQUIREMENTS.md`. List its acceptance checks.
+2. **Analyse:** check the current code and the SDK docs or source for what is
+   needed. Note gaps, risks and anything that needs my decision (new
+   dependency, unclear requirement), and ask before going on.
+3. **Plan:** a short plan (files, approach, one test per acceptance check).
+   Tell me the plan before coding.
+4. **Code:** small, commented, requirement IDs in comments.
+5. **Test:** offline tests, then live tests (`HUB_LIVE=1`), then a smoke run of
+   the real app.
+6. **Review and rework:** review the changes for bugs, security (hard rules
+   above), and requirement coverage. Use an independent review (a fresh
+   reviewer that sees the code, not my conclusions). Fix what it finds, re-test,
+   and review again. Repeat until a review finds no real bugs.
+7. **Final test:** run the full test suite (offline and live) on the final code.
+8. **Hand over:** tell me the milestone is ready to test, with the results.
+9. **Commit:** after I confirm it works, commit locally. The message lists
+   what changed with requirement IDs. Never add `Co-Authored-By`, "Generated
+   with Claude" or any other AI attribution line. Do not push unless I ask.
