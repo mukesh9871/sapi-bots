@@ -91,8 +91,8 @@ async function send(text) {
   setStreaming(true);
   setActivity("thinking…");
 
-  let rafPending = false;
-  const render = () => { rafPending = false; bot.body.innerHTML = renderMarkdown(bot.text); scrollDown(); };
+  let rafId = 0; // queued redraw, 0 = none
+  const render = () => { rafId = 0; bot.body.innerHTML = renderMarkdown(bot.text); scrollDown(); };
   let errorShown = false;
 
   try {
@@ -120,7 +120,7 @@ async function send(text) {
         if (ev.kind === "text") {
           bot.text += ev.text;
           setActivity("");
-          if (!rafPending) { rafPending = true; requestAnimationFrame(render); }
+          if (!rafId) rafId = requestAnimationFrame(render);
         } else if (ev.kind === "tool") {
           setActivity(ev.text === "WebSearch" ? "searching the web…" : ev.text === "WebFetch" ? "reading a page…" : `using ${ev.text}…`);
         } else if (ev.kind === "status") {
@@ -136,6 +136,9 @@ async function send(text) {
     showError(bot, { code: err.code || "network", detail: err.message }, text); errorShown = true;
   }
 
+  // Cancel any queued redraw first: it would run after enhanceCode and wipe the
+  // highlighting and code Copy buttons (found in review).
+  if (rafId) cancelAnimationFrame(rafId);
   render();
   enhanceCode(bot.body);
   if (bot.text) { bot.copy.hidden = false; bot.copy.onclick = () => copyText(bot.text, bot.copy); }

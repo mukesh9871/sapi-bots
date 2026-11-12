@@ -135,6 +135,7 @@ async def main() -> int:
                 line = last_failed
 
             print("bot> ", end="", flush=True)
+            chat.stop_requested = False  # a late Ctrl+C from the last reply must not stop this one
             state["streaming"] = True
             try:
                 done, error = await stream_reply(chat, line)

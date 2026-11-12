@@ -108,6 +108,9 @@ def status_line(api_key_source: str | None, login: LoginState | None = None) -> 
         return False, f"WARNING: an API credential is in use ({api_key_source}). Usage may be billed to the API."
     if login is not None and login.logged_in is False:
         return False, "Not signed in to Claude."
+    if api_key_source is None and login is not None and login.logged_in is None:
+        # Never claim "signed in" when we could not tell (CLI missing, timeout, odd output).
+        return False, f"Could not check sign-in. {login.detail}".strip()
     if login is not None and login.auth_method not in (None, "claude.ai"):
         return False, f"WARNING: signed in with '{login.auth_method}', not a Claude subscription."
     plan = f" ({login.subscription})" if login and login.subscription else ""

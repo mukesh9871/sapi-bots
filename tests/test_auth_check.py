@@ -56,3 +56,13 @@ def test_status_line_not_logged_in():  # R-AUTH-4
 
 def test_parse_login_status_non_object():  # review 2 finding 4
     assert parse_login_status(["x"]).logged_in is None
+
+
+def test_status_line_unknown_login_is_not_ok():  # review 3 finding 2, R-AUTH-4
+    ok, text = status_line(None, LoginState(None, detail="Claude Code CLI not found."))
+    assert not ok and "Could not check sign-in" in text and "not found" in text
+
+
+def test_status_line_sdk_confirmation_wins_over_unknown_login():  # R-AUTH-8
+    ok, _ = status_line("none", LoginState(None))
+    assert ok
