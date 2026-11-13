@@ -78,6 +78,12 @@ select, input { background: var(--panel); border: 1px solid var(--border); borde
 .msg .avatar { margin-right: 4px; }
 .msg .body > :first-child { margin-top: 0; }
 .msg .body > :last-child { margin-bottom: 0; }
+/* F-WEB-2: folded source links under a reply */
+.sources { margin-top: 8px; font-size: 13px; }
+.sources summary { cursor: pointer; color: var(--muted); }
+.sources ul { margin: 4px 0 0; padding-left: 18px; }
+.sources li { margin: 2px 0; overflow-wrap: anywhere; }
+.sources .host { color: var(--muted); font-size: 12px; }
 .msg .note, .chat-note { color: var(--muted); font-style: italic; font-size: 13px; margin-top: 6px; }
 .chat-note { align-self: center; margin: 0; }
 .msg .error { color: var(--danger); margin-top: 8px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; white-space: pre-wrap; }

@@ -29,7 +29,9 @@ const ERRORS = {
   authentication_failed: "You are not signed in to Claude. Run `claude` in a terminal, type /login, choose \"Claude account with subscription\", then restart the app.",
   rate_limit: "You have reached your Claude subscription usage limit.",
   billing_error: "Claude reported a billing problem with this account.",
-  server_error: "Claude's servers had a problem.",
+  server_error: "Claude could not be reached, or its servers had a problem. Check your internet connection, then press Retry.",
+  invalid_request: "Claude could not handle this message. Try rewording it or starting a new chat.",
+  unknown: "Something went wrong talking to Claude.",
   exception: "Something went wrong talking to Claude.",
   network: "Lost connection to the app. Is it still running?",
 };
@@ -103,6 +105,33 @@ function finishBot(bot) {
   bot.body.innerHTML = renderMarkdown(bot.text);
   enhanceCode(bot.body);
   if (bot.text) { bot.copy.hidden = false; bot.copy.onclick = () => copyText(bot.text, bot.copy); }
+}
+
+// F-WEB-2: a folded "Sources (n)" list under a reply that used the web. Web data is
+// information, not instructions: titles go in as text, only http(s) links, and links open in a
+// new tab with no way back to this window (noopener) and no referrer.
+function showSources(bot, sources) {
+  const list = (sources || []).filter((x) => /^https?:\/\//i.test(x.url));
+  bot.sources = list;
+  let box = bot.div.querySelector(".sources");
+  if (!list.length) { if (box) box.remove(); return; }
+  if (!box) {
+    box = document.createElement("details"); box.className = "sources";
+    box.append(document.createElement("summary"), document.createElement("ul"));
+    bot.body.after(box); // under the reply text, above any note or error
+  }
+  box.querySelector("summary").textContent = `Sources (${list.length})`;
+  box.querySelector("ul").replaceChildren(...list.map((x) => {
+    const li = document.createElement("li");
+    const a = document.createElement("a");
+    a.href = x.url; a.target = "_blank"; a.rel = "noopener noreferrer";
+    let host = ""; try { host = new URL(x.url).hostname.replace(/^www\./, ""); } catch { /* shown as is */ }
+    a.textContent = x.title || host || x.url;
+    a.title = x.url;
+    const h = document.createElement("span"); h.className = "host"; h.textContent = host;
+    li.append(a, " ", h);
+    return li;
+  }));
 }
 
 function addChatNote(text, before) {
@@ -209,6 +238,12 @@ async function send(text) {
           if (turnVisible()) addChatNote(ev.text, bot.div); // F-HIST-4: restored from saved history
         } else if (ev.kind === "tool") {
           if (turnVisible()) setActivity(ev.text === "WebSearch" ? "searching the web…" : ev.text === "WebFetch" ? "reading a page…" : `using ${ev.text}…`);
+        } else if (ev.kind === "retry") {
+          // N-REL-1: Claude is not answering and the app is trying again; Stop still works.
+          const d = ev.data || {};
+          if (turnVisible()) setActivity(`Claude is not answering, trying again (${d.attempt} of ${d.max_retries})…`);
+        } else if (ev.kind === "sources") {
+          showSources(bot, ev.sources); // the full list so far
         } else if (ev.kind === "status") {
           showStatus(ev);
         } else if (ev.kind === "error") {
@@ -318,6 +353,8 @@ function showError(bot, ev, originalText) {
     : ERRORS[ev.code] || `Something went wrong (${ev.code}).`;
   const reset = ev.rate_limit && ev.rate_limit.resets_at;
   if (ev.code === "rate_limit" && reset) msg += ` It resets at ${new Date(reset * 1000).toLocaleString()}.`;
+  // R-AUTH-6: no reset time from a rate-limit event, so show Claude's own words, which may have one.
+  else if (ev.code === "rate_limit" && ev.detail) msg += ` Claude says: "${ev.detail}"`;
   const box = document.createElement("div"); box.className = "error";
   box.textContent = msg;
   const retry = document.createElement("button"); retry.textContent = "Retry";
@@ -389,7 +426,7 @@ async function openChat(id, reload = false) {
     clearMessages();
     for (const m of messages) {
       if (m.role === "user") { addUserMessage(m.text); continue; }
-      const bot = addBotMessage(); bot.text = m.text; finishBot(bot);
+      const bot = addBotMessage(); bot.text = m.text; finishBot(bot); showSources(bot, m.sources);
       if (m.status === "stopped") addNote(bot, "(stopped)");
     }
     // Back to the chat that is still replying: re-attach the live reply under its question.

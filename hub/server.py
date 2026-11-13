@@ -14,8 +14,10 @@ Security (N-SEC-1, N-SEC-4):
 from __future__ import annotations
 
 import asyncio
+import errno
 import json
 import secrets
+import socket
 import sys
 import threading
 import webbrowser
@@ -292,6 +294,7 @@ def create_app(token: str, port: int, *, login: LoginState | None = None,
             # and the reply is still saved.
             nonlocal chat_id
             reply: list[str] = []
+            sources: list[dict] = []  # F-WEB-2: the reply's web sources, saved with it
             stopped = failed = False
             user_msg = None
             created = False  # this turn created the chat
@@ -341,10 +344,16 @@ def create_app(token: str, port: int, *, login: LoginState | None = None,
                         stopped = str(d["terminal_reason"] or "").startswith("aborted")
                         queue.put_nowait({"kind": "done", "subtype": d["subtype"],
                                           "terminal_reason": d["terminal_reason"], "usage": d["usage"]})
+                    elif ev.kind == "sources":
+                        sources = ev.data["sources"]
+                        queue.put_nowait({"kind": "sources", "sources": sources})
                     elif ev.kind == "error":
                         failed = True
+                        # detail: the CLI's own error text, used only to show a usage-limit
+                        # reset time when no rate-limit event gave one (R-AUTH-6).
                         queue.put_nowait({"kind": "error", "code": ev.text,
-                                          "rate_limit": session.last_rate_limit})
+                                          "rate_limit": session.last_rate_limit,
+                                          "detail": ev.data.get("detail", "")})
                     else:
                         if ev.kind == "text":
                             reply.append(ev.text)
@@ -355,7 +364,7 @@ def create_app(token: str, port: int, *, login: LoginState | None = None,
             finally:
                 try:
                     if reply:  # F-HIST-1: the reply is saved, a stopped one too
-                        store.add_message(chat_id, "bot", "".join(reply), "stopped" if stopped else "")
+                        store.add_message(chat_id, "bot", "".join(reply), "stopped" if stopped else "", sources)
                     elif failed and user_msg is not None:
                         # No reply: the window puts the message back in the input box for Retry,
                         # so drop it here, or a retry would save it twice.
@@ -496,11 +505,30 @@ def make_server(app: FastAPI, port: int) -> uvicorn.Server:
                                          timeout_graceful_shutdown=3))
 
 
+EXIT_ALREADY_RUNNING = 2  # start.bat shows a message box for this (the console may be minimized)
+
+
+def port_in_use(port: int) -> bool:
+    """True if something already listens on 127.0.0.1:port (usually the hub started earlier).
+    Only "address in use" counts: another bind error (a port range Windows reserved for Hyper-V,
+    WSL or Docker) is left to uvicorn, which prints the real reason (review M4)."""
+    with socket.socket() as s:
+        try:
+            s.bind(("127.0.0.1", port))
+        except OSError as exc:
+            return exc.errno == errno.EADDRINUSE
+    return False
+
+
 def main() -> int:
     notices = scrub_billing_env()  # R-AUTH-3, before anything starts the SDK
     for n in notices:
         print(n)
     port = int(config.load()["port"])
+    if port_in_use(port):
+        # A second click on the shortcut: say so instead of failing silently in a minimized console.
+        print(f"Port {port} is already in use: the hub is probably running already.")
+        return EXIT_ALREADY_RUNNING
     token = secrets.token_urlsafe(32)
     app = create_app(token, port, notices=notices)
 

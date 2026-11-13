@@ -39,7 +39,7 @@ The app must run entirely on my Claude subscription by using the Claude Agent SD
 3. **R-AUTH-3:** ✅ On startup, the app checks that the `ANTHROPIC_API_KEY` environment variable is not set. If it is set, the app removes it from its own process before starting the SDK and shows a notice, because the key would switch billing to the API. The same check covers the Bedrock and Vertex switches.
 4. **R-AUTH-4:** ✅ If the user is not logged in, show a clear message with the steps to log in, instead of a raw error.
 5. **R-AUTH-5:** ✅ The app does not extract, copy or reuse the login token outside the official SDK.
-6. **R-AUTH-6:** When the subscription usage limit is reached, show a friendly message with the time it resets (if available), and keep the typed message so it is not lost.
+6. **R-AUTH-6:** ✅ When the subscription usage limit is reached, show a friendly message with the time it resets (if available), and keep the typed message so it is not lost.
 7. **R-AUTH-7:** The app is for one person, me. It is never shared, hosted or handed to others with my login: Anthropic does not allow developers to offer claude.ai login or rate limits to other people's products unless approved ([source](https://code.claude.com/docs/en/agent-sdk/overview)).
 8. **R-AUTH-8:** ✅ On startup the app confirms that the session is using the subscription login and not a key, where the SDK reports it, and shows the result in the status line.
 9. **R-AUTH-9:** Platform connectors (YouTube, Instagram, X, job sites) sign in with those platforms' own keys or logins. These are not Anthropic keys, they are billed (if at all) by that platform, and they are stored as N-SEC-6 requires.
@@ -75,9 +75,9 @@ The app must let me chat, pick a personality, keep history, and search the web; 
 
 **Web search**
 
-1. **F-WEB-1:** The bot can search the web and read pages when a question needs current information.
-2. **F-WEB-2:** Replies that use the web show the source links.
-3. **F-WEB-3:** A toggle to turn web access off.
+1. **F-WEB-1:** ✅ The bot can search the web and read pages when a question needs current information.
+2. **F-WEB-2:** ✅ Replies that use the web show the source links.
+3. **F-WEB-3:** ✅ A toggle to turn web access off.
 
 **Later**
 
@@ -206,7 +206,7 @@ The app should start quickly, stay private on my PC, and fail with clear message
 | --- | --- | --- |
 | N-PERF-1 | Speed | App window opens in under 5 seconds on a normal PC. |
 | N-PERF-2 | Speed | The first words of a reply start streaming within a few seconds (depends on Claude's servers). |
-| N-REL-1 | Reliability | Network errors, timeouts and usage-limit messages are shown in plain words, with a Retry button. |
+| N-REL-1 ✅ | Reliability | Network errors, timeouts and usage-limit messages are shown in plain words, with a Retry button. |
 | N-REL-2 ✅ | Reliability | A crash or closed window never loses saved chat history. |
 | N-SEC-1 ✅ | Security | The app listens only on `127.0.0.1` (localhost), never on the network, unless I turn on phone access later. |
 | N-SEC-2 | Security | No telemetry or analytics sent anywhere except the Claude requests themselves. |
@@ -340,9 +340,9 @@ Build in three phases, each usable on its own. Phase 1 is Milestones 1 to 4 (the
 
 **Milestone 4: Web search and polish**
 
-- [ ] Web search toggle works, and web-based answers show source links.
-- [ ] Usage-limit and network errors show friendly messages with Retry.
-- [ ] Desktop shortcut launches the app in one click.
+- [x] Web search toggle works, and web-based answers show source links.
+- [x] Usage-limit and network errors show friendly messages with Retry.
+- [x] Desktop shortcut launches the app in one click.
 
 **Milestone 5: Roles and single agents**
 

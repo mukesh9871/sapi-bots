@@ -14,7 +14,7 @@ boxes and ✅ marks there show what is built and tested.
 | 1. Core chat app | 1. Terminal chat | Done |
 | | 2. Desktop chat window | Done |
 | | 3. History and settings | Done |
-| | 4. Web search and polish | Next |
+| | 4. Web search and polish | Ready to test |
 | 2. Generic platform | 5 to 8. Roles, approvals, log, budgets, teams, scheduler, packs | Not started |
 | 3. Instruction packs | 9 to 13. Routines, social media, jobs, software team, video | Not started |
 
@@ -25,9 +25,15 @@ boxes and ✅ marks there show what is built and tested.
 - **Personalities:** Fun (witty), Straight (blunt and short), Explainer (step by step),
   or your own custom prompt. You can switch in the middle of a chat.
 - **Model choice:** plan default, Haiku, Sonnet or Opus.
-- **Web search** on or off (read-only: it never posts or sends anything).
+- **Web search** on or off (read-only: it never posts or sends anything). Answers that
+  used the web show a folded **Sources** list with the pages it searched and read.
 - **Chat history** saved on your PC: a sidebar with every chat (newest first), search
-  over titles and messages, rename, delete, and Markdown export.
+  over titles and messages (matching at the start of words), rename, delete, and
+  Markdown export. You can switch chats while the bot is still answering: the reply
+  keeps going and is saved to its own chat.
+- **Plain error messages with Retry:** usage limit (with the reset time), lost
+  internet connection, and other problems. If Claude does not answer, the window shows
+  "trying again (2 of 5)" and gives up after about 15 seconds.
 - **Picks up where you left off:** reopen an old chat after a restart and Claude
   still remembers it.
 - **Settings page (⚙):** bot name and avatar, theme (system, light or dark), default
@@ -59,8 +65,15 @@ process at start-up and shows a notice, so you are never billed on an API accoun
 
 ## Running it
 
-**Chat window:** double-click `start.bat`. It starts the server and opens the chat
-in your browser. Close the console window (or press Ctrl+C in it) to stop.
+**Chat window:** double-click `start.bat`, or the **AI Hub** desktop shortcut. It
+starts the server and opens the chat in your browser. Close the console window (or
+press Ctrl+C in it) to stop.
+
+**Desktop shortcut** (once):
+```
+powershell -ExecutionPolicy Bypass -File scripts\make_shortcut.ps1
+```
+It creates "AI Hub" on your Desktop. The console starts minimized in the taskbar.
 
 **Terminal chat:**
 ```
@@ -164,6 +177,7 @@ hub/
     personalities.py   built-in prompts
   web/               index.html, app.css, app.js, vendor/ (marked, DOMPurify, highlight.js)
 scripts/usage_test.py  plan-usage measurement
+scripts/make_shortcut.ps1  creates the desktop shortcut
 tests/               pytest suite (offline and live)
 docs/REQUIREMENTS.md full specification and milestones
 start.bat            starts the chat window
@@ -190,7 +204,7 @@ In PowerShell, use `$env:HUB_LIVE='1'` instead of `set HUB_LIVE=1`.
 - Offline tests use a temporary database and a fake Claude session. They never touch
   your real `data/chats.db`.
 - Live tests use your subscription (a few short messages, mostly on Haiku).
-- Current result: 109 passed (94 offline, 15 live).
+- Current result: 130 passed (111 offline, 19 live).
 
 ## Working rules for development
 
@@ -206,6 +220,8 @@ The full list is in [CLAUDE.md](CLAUDE.md). In short:
 ## Known limits
 
 - The chat folder location cannot be changed from the settings page yet.
-- If a message fails before any reply arrives, that message is not kept in history.
+- If a message fails before any reply arrives, that message is not kept in history
+  (it goes back into the input box instead).
 - In the terminal chat, Ctrl+C pressed while Claude is still starting is ignored.
-- There are no automated browser tests for the window yet.
+- There are no automated browser tests for the window in the test suite yet (smoke
+  runs in a real browser are done by hand for each milestone).

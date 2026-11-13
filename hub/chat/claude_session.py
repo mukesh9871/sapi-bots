@@ -39,6 +39,7 @@ from claude_agent_sdk import (
     TextBlock,
     ToolPermissionContext,
     ToolUseBlock,
+    UserMessage,
 )
 
 from hub.chat.personalities import system_prompt
@@ -47,6 +48,7 @@ from hub.chat.personalities import system_prompt
 warnings.filterwarnings("ignore", message="can_use_tool will not be invoked")
 
 WEB_TOOLS = ["WebSearch", "WebFetch"]
+MAX_RETRIES = 5  # N-REL-1: API retries before a plain error with Retry (see build_options)
 
 # Built-ins plain chat must never have. Listed by bare name so the CLI removes them (N-SEC-3).
 DENIED_TOOLS = [
@@ -140,15 +142,66 @@ def build_options(
         resume=resume,
         include_partial_messages=True,       # F-CHAT-1: word-by-word streaming
         # N-SEC-2: no telemetry, error reporting or auto-update traffic from the child CLI.
-        env={"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"},
+        env={
+            "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+            # N-REL-1: give up after about 15 s when Claude cannot be reached (default 10 retries,
+            # measured at 3 silent minutes), then show a plain message with Retry. Each retry is
+            # shown in the window, so a short outage is still waited out visibly.
+            "CLAUDE_CODE_MAX_RETRIES": str(MAX_RETRIES),
+        },
     )
+
+
+# ---- web sources (F-WEB-2) ----------------------------------------------------
+
+MAX_SOURCES = 8
+URL_RE = r"https?://[^\s<>\"'`\\]+"  # whole string must match (fullmatch); no backslash (breaks <...>)
+
+
+def _source(url: Any, title: Any = "") -> dict[str, str] | None:
+    """One source link, or None. Web data is information, not instructions: only plain
+    http(s) URLs pass, and titles are short one-line text (the window shows them as text, never HTML).
+    No spaces, line breaks, quotes or angle brackets in a URL, so it cannot break out of the
+    <...> link in a Markdown export (review M4)."""
+    if not isinstance(url, str) or len(url) > 2000 or not re.fullmatch(URL_RE, url, re.IGNORECASE):
+        return None
+    title = " ".join(title.split())[:200] if isinstance(title, str) else ""  # one line, no injected blocks
+    return {"url": url, "title": title}
+
+
+def web_sources(tool_result: Any) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
+    """Source links from one tool result (UserMessage.tool_use_result), as (pages read, search hits).
+    WebFetch gives {"url": ...}; WebSearch gives {"results": [{"content": [{"title", "url"}]}, ...]}
+    (shape checked live against claude-agent-sdk 0.2.180)."""
+    if not isinstance(tool_result, dict):
+        return [], []
+    code = tool_result.get("code")
+    fetched = not isinstance(code, int) or 200 <= code < 300  # a 404 or redirect notice was not read
+    read = [s for s in [_source(tool_result.get("url"))] if s and fetched and "results" not in tool_result]
+    hits = []
+    for r in tool_result.get("results") or []:
+        for item in (r.get("content") if isinstance(r, dict) else None) or []:
+            if isinstance(item, dict) and (s := _source(item.get("url"), item.get("title"))):
+                hits.append(s)
+    return read, hits
+
+
+def merge_sources(read: list[dict[str, str]], hits: list[dict[str, str]]) -> list[dict[str, str]]:
+    """Pages read first, then search hits; one entry per URL (a title wins over none); at most 8."""
+    out: dict[str, dict[str, str]] = {}
+    for s in read + hits:
+        if s["url"] in out:
+            out[s["url"]]["title"] = out[s["url"]]["title"] or s["title"]
+        elif len(out) < MAX_SOURCES:
+            out[s["url"]] = dict(s)
+    return list(out.values())
 
 
 # ---- events yielded to the UI -------------------------------------------------
 
 @dataclass
 class Event:
-    kind: str  # "init" | "text" | "tool" | "rate_limit" | "error" | "done"
+    kind: str  # "init" | "text" | "tool" | "sources" | "retry" | "rate_limit" | "error" | "done"
     text: str = ""
     data: dict[str, Any] = field(default_factory=dict)
 
@@ -280,12 +333,21 @@ class ChatSession:
     async def _receive(self) -> AsyncIterator[Event]:
         """Turn SDK messages for the current reply into Events."""
         streamed = False  # True once text deltas arrived, so we do not print the full text twice
+        # R-AUTH-6: a reset time from an earlier turn may belong to another limit; only this turn's counts.
+        self.last_rate_limit = None
+        read: list[dict[str, str]] = []  # F-WEB-2: pages read and search hits in this reply
+        hits: list[dict[str, str]] = []
         async for msg in self.client.receive_response():
             if isinstance(msg, SystemMessage) and msg.subtype == "init":
                 self.session_id = msg.data.get("session_id")
                 self.api_key_source = msg.data.get("apiKeySource")
                 self.init_tools = list(msg.data.get("tools", []))
                 yield Event("init", data=msg.data)
+
+            elif isinstance(msg, SystemMessage) and msg.subtype == "api_retry":
+                # N-REL-1: Claude did not answer and the CLI is trying again (shape checked live).
+                d = msg.data
+                yield Event("retry", data={k: d.get(k) for k in ("attempt", "max_retries", "retry_delay_ms", "error_status")})
 
             elif isinstance(msg, StreamEvent):
                 ev = msg.event
@@ -295,13 +357,25 @@ class ChatSession:
 
             elif isinstance(msg, AssistantMessage):
                 if msg.error:
-                    yield Event("error", msg.error)
+                    # The CLI also sends its own error text ("API Error: Connection refused ...") as
+                    # the message. It is not a reply, so it is never shown or saved as one (N-REL-1).
+                    detail = " ".join(b.text for b in msg.content if isinstance(b, TextBlock))[:500]
+                    yield Event("error", msg.error, data={"detail": detail})
+                    streamed = False
+                    continue
                 for block in msg.content:
                     if isinstance(block, (ToolUseBlock, ServerToolUseBlock)):
                         yield Event("tool", block.name, data={"input": block.input})
                     elif isinstance(block, TextBlock) and not streamed:
                         yield Event("text", block.text)
                 streamed = False  # next assistant message streams afresh
+
+            elif isinstance(msg, UserMessage) and msg.tool_use_result is not None:
+                r, h = web_sources(msg.tool_use_result)
+                if r or h:
+                    read += r
+                    hits += h
+                    yield Event("sources", data={"sources": merge_sources(read, hits)})  # the full list so far
 
             elif isinstance(msg, RateLimitEvent):
                 info = msg.rate_limit_info

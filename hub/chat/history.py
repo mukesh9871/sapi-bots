@@ -14,6 +14,7 @@ committed at once, so a crash or closed window never loses saved messages (N-REL
 
 from __future__ import annotations
 
+import json
 import re
 import sqlite3
 import time
@@ -45,7 +46,8 @@ CREATE TABLE IF NOT EXISTS messages (
     role TEXT NOT NULL,          -- 'user' or 'bot'
     text TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT '',  -- '' or 'stopped'
-    created_at REAL NOT NULL
+    created_at REAL NOT NULL,
+    sources TEXT NOT NULL DEFAULT '[]'  -- F-WEB-2: JSON list of {url, title} the reply used
 );
 CREATE TABLE IF NOT EXISTS chat_sessions (  -- every session a chat used (D-2)
     chat_id INTEGER NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
@@ -63,6 +65,13 @@ def _word_start(query: str) -> re.Pattern[str]:
     if query[:1].isascii() and query[:1].isalnum():
         return re.compile(r"(?<!\w)" + re.escape(query), re.IGNORECASE)
     return re.compile(re.escape(query), re.IGNORECASE)
+
+
+def _md_label(text: str) -> str:
+    """A web page title as Markdown link text: brackets escaped so it cannot break the link, and
+    < > & escaped so a viewer that renders raw HTML shows a tag as text (review M4)."""
+    bs = chr(92)  # backslash
+    return "".join(bs + c if c in (bs, "[", "]", "<", ">", "&") else c for c in text)
 
 
 def make_title(text: str) -> str:
@@ -83,6 +92,8 @@ class HistoryStore:
             cols = {r[1] for r in db.execute("PRAGMA table_info(chats)")}
             if "system_prompt" not in cols:  # a database from before this column existed
                 db.execute("ALTER TABLE chats ADD COLUMN system_prompt TEXT")
+            if "sources" not in {r[1] for r in db.execute("PRAGMA table_info(messages)")}:  # before M4
+                db.execute("ALTER TABLE messages ADD COLUMN sources TEXT NOT NULL DEFAULT '[]'")
 
     def _conn(self) -> sqlite3.Connection:
         db = sqlite3.connect(self.path, timeout=10)
@@ -154,12 +165,13 @@ class HistoryStore:
         return [r[0] for r in db.execute("SELECT session_id FROM chat_sessions WHERE chat_id = ?", (chat_id,))]
 
     # ---- messages -----------------------------------------------------------------
-    def add_message(self, chat_id: int, role: str, text: str, status: str = "") -> int:
+    def add_message(self, chat_id: int, role: str, text: str, status: str = "",
+                    sources: list[dict[str, str]] | None = None) -> int:
         now = time.time()
         with closing(self._conn()) as db, db:
             cur = db.execute(
-                "INSERT INTO messages (chat_id, role, text, status, created_at) VALUES (?, ?, ?, ?, ?)",
-                (chat_id, role, text, status, now))
+                "INSERT INTO messages (chat_id, role, text, status, created_at, sources) VALUES (?, ?, ?, ?, ?, ?)",
+                (chat_id, role, text, status, now, json.dumps(sources or [])))
             db.execute("UPDATE chats SET updated_at = ? WHERE id = ?", (now, chat_id))
             return cur.lastrowid
 
@@ -178,9 +190,9 @@ class HistoryStore:
 
     def messages(self, chat_id: int) -> list[dict[str, Any]]:
         with closing(self._conn()) as db:
-            rows = db.execute("SELECT id, role, text, status, created_at FROM messages "
+            rows = db.execute("SELECT id, role, text, status, created_at, sources FROM messages "
                               "WHERE chat_id = ? ORDER BY id", (chat_id,))
-            return [dict(r) for r in rows]
+            return [{**dict(r), "sources": json.loads(r["sources"] or "[]")} for r in rows]
 
     # ---- F-HIST-4: replay when the SDK transcript is gone --------------------------
     def replay_text(self, chat_id: int) -> tuple[str, int]:
@@ -221,6 +233,8 @@ class HistoryStore:
             lines += [f"## {who} ({stamp})", "", m["text"], ""]
             if m["status"] == "stopped":
                 lines += ["*(stopped)*", ""]
+            if m["sources"]:  # F-WEB-2
+                lines += ["Sources:", *[f"- [{_md_label(x['title'] or x['url'])}](<{x['url']}>)" for x in m["sources"]], ""]
         folder = folder or EXPORT_DIR
         folder.mkdir(parents=True, exist_ok=True)
         slug = re.sub(r"[^A-Za-z0-9]+", "-", chat["title"]).strip("-")[:40] or "chat"
