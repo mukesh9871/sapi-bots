@@ -1,4 +1,4 @@
-// Chat window (Milestones 2 and 3). Plain JavaScript, no build step.
+// Chat window (Milestones 2 to 5). Plain JavaScript, no build step.
 // The launch token travels as an HttpOnly cookie, so fetch() sends it automatically.
 "use strict";
 
@@ -12,6 +12,8 @@ const els = {
   sidebar: $("sidebar"), toggleSidebar: $("toggle-sidebar"), search: $("search"),
   chatList: $("chat-list"), chatListEmpty: $("chat-list-empty"), menu: $("chat-menu"),
   settingsBtn: $("open-settings"), settingsDialog: $("settings-dialog"), settingsForm: $("settings-form"),
+  talkTo: $("talk-to"), personalityBox: $("personality-box"), modelBox: $("model-box"), webBox: $("web-box"),
+  rolesBtn: $("open-roles"), rolesDialog: $("roles-dialog"), roleForm: $("role-form"), roleList: $("role-list"),
 };
 
 const LABELS = { fun: "Fun", straight: "Straight", explainer: "Explainer", custom: "Custom" };
@@ -23,6 +25,12 @@ let switching = false; // New chat or delete in flight: no sending until it is d
 // The reply in flight: { chatId, title, bot }. It keeps streaming (and is saved by the server)
 // while another chat is on screen. Only one runs at a time (N-PERF-3: one live Claude process).
 let turn = null;
+// Milestone 5 (G-AGENT-3): a chat talks to plain Chat (null) or to one role (its id).
+let roles = []; // from /api/roles
+let toolCatalog = {};
+let currentRole = null; // role of the chat on screen
+let newChatRole = null; // "Talk to" choice for the next new chat
+const roleById = (id) => roles.find((r) => r.id === id);
 
 // N-REL-1 / R-AUTH-4 / R-AUTH-6: plain words for errors.
 const ERRORS = {
@@ -34,6 +42,8 @@ const ERRORS = {
   unknown: "Something went wrong talking to Claude.",
   exception: "Something went wrong talking to Claude.",
   network: "Lost connection to the app. Is it still running?",
+  role_missing: "This role was deleted. You can still read this chat, but not continue it. Start a new chat to use another role.",
+  role_broken: "This role's file has a problem, so it cannot run. Open Roles to fix it.",
 };
 
 // Small fetch helper: JSON in, JSON out, throws with the server's reason.
@@ -89,13 +99,15 @@ function addUserMessage(text) {
   scrollDown(true);
 }
 
-function addBotMessage() {
-  // F-PERS-4: the bot's name and avatar from Settings. textContent, never HTML.
+function addBotMessage(roleId = currentRole) {
+  // F-PERS-4: the bot's name and avatar from Settings, or the role's name (G-AGENT-3).
+  // textContent, never HTML.
   const div = document.createElement("div");
   div.className = "msg bot";
   div.innerHTML = '<div class="who"><span><span class="avatar"></span><span class="name"></span></span><button class="ghost copy-reply" hidden>Copy</button></div><div class="body"></div>';
-  div.querySelector(".avatar").textContent = settings.avatar || "";
-  div.querySelector(".name").textContent = settings.bot_name || "Bot";
+  const role = roleId ? roleById(roleId) : null;
+  div.querySelector(".avatar").textContent = roleId ? "🛠" : settings.avatar || "";
+  div.querySelector(".name").textContent = roleId ? (role ? role.name : "Deleted role") : settings.bot_name || "Bot";
   els.messages.appendChild(div);
   return { div, body: div.querySelector(".body"), copy: div.querySelector(".copy-reply"), text: "" };
 }
@@ -154,6 +166,7 @@ function setStreaming(on) {
   els.send.hidden = on; els.stop.hidden = !on;
   // Sidebar and New chat stay usable: switching chats mid-reply is allowed.
   if (!on) { els.activity.hidden = true; els.input.focus(); }
+  showRoleControls();
 }
 
 function setActivity(text) { els.activity.textContent = text; els.activity.hidden = !text; }
@@ -174,11 +187,50 @@ function showTurnActivity() {
   else setActivity(`Still answering in "${turn.title}"…`);
 }
 
-function setCurrentChat(id, title) {
+// role: the chat's role id. Left out: a new chat uses the "Talk to" choice, a saved one keeps its role.
+function setCurrentChat(id, title, role) {
   currentChatId = id;
+  currentRole = role !== undefined ? role : id === null ? newChatRole : currentRole;
   els.title.textContent = title || "New chat";
   els.exportBtn.hidden = id === null;
   els.chatList.querySelectorAll("li").forEach((li) => li.classList.toggle("active", Number(li.dataset.id) === id));
+  showRoleControls();
+}
+
+// G-AGENT-3: "Talk to" can be changed only before a chat starts. A role chat runs with the
+// role's own instructions, tools and model, so personality, model and web controls are hidden.
+function fillTalkTo() {
+  const opts = [["", "Chat"], ...roles.map((r) => [r.id, r.problem ? `${r.name} (needs fixing)` : r.name])];
+  if (currentRole && !roleById(currentRole)) opts.push([currentRole, "Deleted role"]);
+  els.talkTo.replaceChildren(...opts.map(([v, label]) => {
+    const o = document.createElement("option"); o.value = v; o.textContent = label; return o;
+  }));
+}
+function showRoleControls() {
+  fillTalkTo();
+  els.talkTo.value = currentRole || "";
+  // Also fixed while the first message of a new chat is being answered on screen.
+  els.talkTo.disabled = currentChatId !== null || (!!turn && turn.chatId === null && turnVisible());
+  els.talkTo.title = currentChatId !== null ? "A chat keeps the role it started with. Press New chat to talk to another." : "";
+  const role = !!currentRole;
+  els.personalityBox.hidden = role; els.modelBox.hidden = role; els.webBox.hidden = role;
+  els.editCustom.hidden = role || settings.personality !== "custom";
+  const r = currentRole ? roleById(currentRole) : null;
+  els.empty.textContent = currentRole ? `Give ${r ? r.name : "this role"} a task.` : "Ask me anything.";
+}
+els.talkTo.onchange = () => {
+  if (currentChatId !== null) return;
+  newChatRole = els.talkTo.value || null;
+  setCurrentChat(null);
+  els.input.focus();
+};
+
+async function loadRoles() {
+  const data = await api("GET", "/api/roles");
+  roles = data.roles; toolCatalog = data.tools;
+  if (newChatRole && !roleById(newChatRole)) newChatRole = null; // deleted
+  if (currentChatId === null) currentRole = newChatRole;
+  showRoleControls();
 }
 
 // ---------- send / stream ----------
@@ -186,7 +238,7 @@ async function send(text) {
   if (streaming || switching || closing || !text.trim()) return;
   addUserMessage(text);
   const bot = addBotMessage();
-  turn = { chatId: currentChatId, title: els.title.textContent, bot };
+  turn = { chatId: currentChatId, title: els.title.textContent, bot, role: currentRole };
   setStreaming(true);
   setActivity("thinking…");
 
@@ -197,7 +249,8 @@ async function send(text) {
   try {
     const res = await fetch("/api/chat", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text, chat_id: currentChatId }),
+      // A new chat says which role it talks to (G-AGENT-3). A saved chat keeps its own.
+      body: JSON.stringify({ text, chat_id: currentChatId, role: currentChatId === null ? currentRole : null }),
     });
     if (!res.ok) {
       // The server answered but refused (busy, bad token...): show its reason, not "lost connection".
@@ -224,7 +277,7 @@ async function send(text) {
         } else if (ev.kind === "chat") {
           turn.chatId = ev.id; turn.title = ev.title;
           // F-HIST-1: the new chat is saved now. Only take over the screen if it is still shown.
-          if (turnVisible()) setCurrentChat(ev.id, ev.title);
+          if (turnVisible()) setCurrentChat(ev.id, ev.title, ev.role ?? null);
           else if (currentChatId === ev.id) reloadChat(ev.id); // opened from the sidebar before this event
           else showTurnActivity();
           refreshChats();
@@ -364,7 +417,7 @@ function showError(bot, ev, originalText) {
     takeRetry(currentChatId, originalText); // sent again, so no stored copy is offered later
     send(originalText);
   };
-  box.appendChild(retry);
+  if (!String(ev.code).startsWith("role_")) box.appendChild(retry); // a retry cannot bring a role back
   bot.div.appendChild(box);
   // R-AUTH-6: the typed message goes back into the input box at the end of send(), once it
   // is known which chat is on screen (a switch may be running now, review M3).
@@ -401,6 +454,11 @@ function chatItem(c) {
   const info = document.createElement("div"); info.className = "info";
   const name = document.createElement("div"); name.className = "name"; name.textContent = c.title; name.title = c.title;
   const date = document.createElement("div"); date.className = "date"; date.textContent = formatDate(c.updated_at);
+  if (c.role) { // G-AGENT-3: which role this chat talks to
+    const r = roleById(c.role);
+    const tag = document.createElement("span"); tag.className = "chat-role"; tag.textContent = ` · ${r ? r.name : "deleted role"}`;
+    date.append(tag);
+  }
   info.append(name, date);
   const more = document.createElement("button"); more.type = "button"; more.className = "more"; more.textContent = "⋯";
   more.title = "Rename, export or delete";
@@ -426,7 +484,7 @@ async function openChat(id, reload = false) {
     clearMessages();
     for (const m of messages) {
       if (m.role === "user") { addUserMessage(m.text); continue; }
-      const bot = addBotMessage(); bot.text = m.text; finishBot(bot); showSources(bot, m.sources);
+      const bot = addBotMessage(chat.role); bot.text = m.text; finishBot(bot); showSources(bot, m.sources);
       if (m.status === "stopped") addNote(bot, "(stopped)");
     }
     // Back to the chat that is still replying: re-attach the live reply under its question.
@@ -436,7 +494,7 @@ async function openChat(id, reload = false) {
       if (turn.note) addChatNote(turn.note, turn.bot.div); // F-HIST-4 "restored" note
     }
     els.empty.hidden = messages.length > 0;
-    setCurrentChat(chat.id, chat.title);
+    setCurrentChat(chat.id, chat.title, chat.role);
     applyPendingRetry(chat.id);
     showTurnActivity();
     scrollDown(true);
@@ -548,7 +606,7 @@ async function saveSettings(patch) {
 function applySettings(s) {
   settings = s;
   els.personality.value = s.personality;
-  els.editCustom.hidden = s.personality !== "custom";
+  els.editCustom.hidden = !!currentRole || s.personality !== "custom";
   els.model.value = s.model;
   els.web.checked = s.web_enabled;
   applyTheme(s.theme);
@@ -670,6 +728,110 @@ $("delete-all-yes").onclick = async () => {
   refreshChats();
 };
 
+// ---------- Roles page (Milestone 5, G-AGENT-1, G-AGENT-2) ----------
+let editingRole = null; // id of the role in the editor, null = a new role
+const roleBoxes = {}; // tool name -> checkbox
+
+function buildToolBoxes() {
+  const box = $("role-tools");
+  box.replaceChildren();
+  for (const [name, info] of Object.entries(toolCatalog)) {
+    const label = document.createElement("label");
+    const cb = document.createElement("input"); cb.type = "checkbox"; cb.value = name;
+    const text = document.createElement("span"); text.textContent = `${info.label} (${name})`;
+    const kind = document.createElement("span"); kind.className = "kind";
+    kind.textContent = info.kind === "read-only" ? "read-only" : "changes its own folder";
+    label.append(cb, text, kind);
+    box.append(label);
+    roleBoxes[name] = cb;
+  }
+}
+
+function showRoleList() {
+  els.roleList.replaceChildren(...roles.map((r) => {
+    const li = document.createElement("li");
+    li.textContent = r.problem ? `⚠ ${r.name}` : r.name;
+    li.title = r.problem ? `Needs fixing: ${r.problem}` : r.name;
+    li.classList.toggle("active", r.id === editingRole);
+    li.classList.toggle("broken", !!r.problem);
+    li.onclick = () => editRole(r.id);
+    return li;
+  }));
+  $("role-list-empty").hidden = roles.length > 0;
+}
+
+function editRole(id) {
+  const r = id ? roleById(id) : null;
+  editingRole = r ? r.id : null;
+  $("role-name").value = r ? r.name : "";
+  $("role-model").value = r ? r.model : "";
+  const tools = r ? r.tools : ["WebSearch", "WebFetch"]; // a new role starts with web tools only
+  for (const [name, cb] of Object.entries(roleBoxes)) cb.checked = tools.includes(name);
+  $("role-instructions").value = r ? r.instructions : "";
+  $("role-folder").textContent = r ? `Its folder: ${r.folder}` : "A new role gets its own folder under projects.";
+  const problem = $("role-problem");
+  problem.textContent = r && r.problem ? `This role cannot run until it is fixed: ${r.problem}. Saving fixes it.` : "";
+  problem.hidden = !(r && r.problem);
+  $("role-error").hidden = true;
+  $("role-delete").hidden = !r; $("role-copy").hidden = !r;
+  showRoleList();
+  $("role-name").focus();
+}
+
+async function openRoles(id) {
+  try { await loadRoles(); } catch (err) { flash(`Could not load roles: ${err.message}.`, true); return; }
+  buildToolBoxes();
+  editRole(id !== undefined ? id : roles[0]?.id ?? null);
+  els.rolesDialog.showModal();
+}
+
+function roleError(err) { const box = $("role-error"); box.textContent = err; box.hidden = false; }
+
+async function saveRole() { // returns the saved role, or null
+  if (!els.roleForm.reportValidity()) return null;
+  const body = {
+    name: $("role-name").value, model: $("role-model").value,
+    tools: Object.entries(roleBoxes).filter(([, cb]) => cb.checked).map(([name]) => name),
+    instructions: $("role-instructions").value,
+  };
+  try {
+    const { role } = editingRole === null ? await api("POST", "/api/roles", body)
+      : await api("PUT", `/api/roles/${editingRole}`, body);
+    await loadRoles();
+    editRole(role.id);
+    refreshChats(); // role names in the sidebar
+    return role;
+  } catch (err) { roleError(`Could not save: ${err.message}.`); return null; }
+}
+
+els.roleForm.onsubmit = async (e) => { e.preventDefault(); if (await saveRole()) flash("Role saved. Open chats use it from their next message."); };
+$("role-new").onclick = () => editRole(null);
+$("role-close").onclick = () => els.rolesDialog.close();
+$("role-copy").onclick = async () => {
+  try {
+    const { role } = await api("POST", `/api/roles/${editingRole}/copy`);
+    await loadRoles(); editRole(role.id);
+  } catch (err) { roleError(`Could not copy: ${err.message}.`); }
+};
+$("role-delete").onclick = async () => {
+  const r = roleById(editingRole);
+  if (!r || !confirm(`Delete the role "${r.name}"? Its chats and its folder are kept, but its chats cannot be continued.`)) return;
+  try {
+    await api("DELETE", `/api/roles/${r.id}`);
+    await loadRoles(); editRole(roles[0]?.id ?? null); refreshChats();
+  } catch (err) { roleError(`Could not delete: ${err.message}.`); }
+};
+// G-AGENT-3: save, then open a new chat that talks to this role.
+$("role-task").onclick = async () => {
+  const role = await saveRole();
+  if (!role) return;
+  if (role.problem) { roleError(`This role cannot run: ${role.problem}.`); return; }
+  els.rolesDialog.close();
+  newChatRole = role.id;
+  els.newChat.click();
+};
+els.rolesBtn.onclick = () => openRoles();
+
 // ---------- new chat ----------
 els.newChat.onclick = async () => {
   if (closing) await closing; // the server is busy closing an idle process
@@ -723,6 +885,8 @@ async function refreshStatus() {
     els.personality.innerHTML = data.personalities.map((p) => `<option value="${p}">${LABELS[p] || p}</option>`).join("");
     buildPromptEditors();
     applySettings(data.settings);
+    await loadRoles().catch(() => {}); // before the chat list, so role chats show their role
+
     showStatus(data.status);
     if (data.status.pending) setTimeout(refreshStatus, 1500); // sign-in check still running
     else if (!data.status.confirmed && data.status.ok) els.status.textContent += " (confirmed after the first message)";

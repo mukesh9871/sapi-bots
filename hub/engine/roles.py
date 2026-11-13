@@ -1,0 +1,200 @@
+"""Roles (Milestone 5): an agent is a role definition (G-AGENT-1), kept as a readable file (G-AGENT-2).
+
+One Markdown file per role in packs/local/roles/<id>.md:
+
+    ---
+    name: Researcher
+    model: sonnet
+    tools: WebSearch, WebFetch, Write
+    ---
+    You research a topic and write report.md in your folder.
+
+- The file name (without .md) is the role's id. It never changes, so chats stay linked
+  when the role is renamed.
+- The header is parsed here (no YAML library, no new dependency).
+- G-TOOL-3: a role lists only tools from TOOL_CATALOG. A hand-edited file that lists
+  anything else (for example Bash) is shown with a problem and never runs.
+- Each role works in its own folder projects/role-<id>/ (G-TEAM-6, N-SEC-5).
+"""
+
+from __future__ import annotations
+
+import os
+import re
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Callable
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+ROLES_DIR = PROJECT_ROOT / "packs" / "local" / "roles"
+ROLE_WORK_ROOT = PROJECT_ROOT / "projects"
+
+# G-TOOL-1, G-TOOL-2: what a role may list. No acting tools until the approval gate (Milestone 6).
+# "files" tools are limited to the role's own folder (see hub/chat/claude_session.py, confine).
+TOOL_CATALOG: dict[str, dict[str, str]] = {
+    "WebSearch": {"kind": "read-only", "label": "Search the web"},
+    "WebFetch": {"kind": "read-only", "label": "Read a web page"},
+    "Read": {"kind": "read-only", "label": "Read files in its folder"},
+    "Glob": {"kind": "read-only", "label": "Find files in its folder"},
+    "Grep": {"kind": "read-only", "label": "Search text in its folder"},
+    "Write": {"kind": "own-folder", "label": "Create files in its folder"},
+    "Edit": {"kind": "own-folder", "label": "Change files in its folder"},
+}
+FILE_TOOLS = ("Read", "Glob", "Grep", "Write", "Edit")
+MODELS = ("", "haiku", "sonnet", "opus")  # "" = the default model from Settings
+
+MAX_NAME = 40
+MAX_INSTRUCTIONS = 20_000
+ID_RE = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")  # a role id is also part of a folder name
+
+
+class RoleError(ValueError):
+    """A role that cannot be saved. The message is shown to the user."""
+
+
+@dataclass(frozen=True)  # frozen: compared by value, so an edited role restarts its session
+class Role:
+    id: str
+    name: str
+    model: str
+    tools: tuple[str, ...]
+    instructions: str
+    problem: str = ""  # set when a hand-edited file is not valid; such a role never runs
+
+    @property
+    def folder(self) -> Path:
+        return ROLE_WORK_ROOT / f"role-{self.id}"
+
+    def to_dict(self) -> dict:
+        return {"id": self.id, "name": self.name, "model": self.model, "tools": list(self.tools),
+                "instructions": self.instructions, "problem": self.problem, "folder": str(self.folder)}
+
+
+def check(name: str, model: str, tools: list[str] | tuple[str, ...], instructions: str) -> str | None:
+    """Returns what is wrong with a role, or None."""
+    # No control characters: a lone carriage return would end the header line on reload (review M5).
+    if not isinstance(name, str) or not 0 < len(name.strip()) <= MAX_NAME or any(ord(c) < 32 or ord(c) == 127 for c in name):
+        return f"name must be 1 to {MAX_NAME} characters on one line"
+    if model not in MODELS:
+        return "unknown model"
+    if not isinstance(tools, (list, tuple)) or not all(isinstance(t, str) for t in tools):
+        return "bad tool list"
+    unknown = [t for t in tools if t not in TOOL_CATALOG]
+    if unknown:
+        return f"tools not allowed for a role: {', '.join(unknown)}"  # G-TOOL-3
+    if not isinstance(instructions, str) or not instructions.strip():
+        return "the job description is empty"
+    if len(instructions) > MAX_INSTRUCTIONS:
+        return "the job description is too long"
+    return None
+
+
+def parse(role_id: str, text: str) -> Role:
+    """Reads a role file. Never raises: a bad file gives a Role with `problem` set."""
+    header: dict[str, str] = {}
+    body = text
+    lines = text.replace("\r\n", "\n").split("\n")
+    if lines and lines[0].strip() == "---" and "---" in (l.strip() for l in lines[1:]):
+        end = next(i for i in range(1, len(lines)) if lines[i].strip() == "---")
+        for line in lines[1:end]:
+            if ":" in line:
+                key, value = line.split(":", 1)
+                header[key.strip().lower()] = value.strip()
+        body = "\n".join(lines[end + 1:])
+    name = header.get("name", "") or role_id
+    model = header.get("model", "")
+    tools = tuple(t.strip() for t in header.get("tools", "").split(",") if t.strip())
+    if {"Write", "Edit"} & set(tools) and "Read" not in tools:
+        tools = ("Read", *tools)  # same rule as save(): the CLI changes only files it has read
+    instructions = body.strip()
+    closed = lines[0].strip() == "---" and "---" in (l.strip() for l in lines[1:])
+    problem = "" if closed else "the file has no header (--- lines above and below it)"
+    problem = problem or check(name, model, tools, instructions) or ""
+    return Role(role_id, name, model, tools, instructions, problem)
+
+
+def dump(role: Role) -> str:
+    return (f"---\nname: {role.name.strip()}\nmodel: {role.model}\n"
+            f"tools: {', '.join(role.tools)}\n---\n{role.instructions.strip()}\n")
+
+
+def make_id(name: str, taken: set[str]) -> str:
+    base = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")[:30].strip("-") or "role"
+    rid, n = base, 2
+    while rid in taken:
+        rid, n = f"{base}-{n}", n + 1
+    return rid
+
+
+class RoleStore:
+    def __init__(self, folder: Path | None = None):
+        self.folder = folder or ROLES_DIR
+        # Ids still used elsewhere (the server adds the role ids of saved chats). A new role never
+        # takes one, so a deleted role's chats and folder never pass to a new role (review M5).
+        self.in_use: Callable[[], set[str]] = lambda: set()
+
+    def _taken(self) -> set[str]:
+        files = {p.stem for p in self.folder.glob("*.md")} if self.folder.is_dir() else set()
+        root = ROLE_WORK_ROOT
+        folders = {d.name[5:] for d in root.glob("role-*")} if root.is_dir() else set()
+        # Lowercase: on Windows "Writer.md" and "writer.md" are the same file (review M5 round 2).
+        return {x.lower() for x in files | folders | self.in_use()}
+
+    def _path(self, role_id: str) -> Path | None:
+        # Never build a path from anything but a plain id (no "..", slashes or drive letters).
+        return self.folder / f"{role_id}.md" if isinstance(role_id, str) and ID_RE.fullmatch(role_id) else None
+
+    def list(self) -> list[Role]:
+        if not self.folder.is_dir():
+            return []
+        roles = [self.get(p.stem) for p in sorted(self.folder.glob("*.md")) if ID_RE.fullmatch(p.stem)]
+        return sorted((r for r in roles if r), key=lambda r: r.name.lower())
+
+    def get(self, role_id: str) -> Role | None:
+        path = self._path(role_id)
+        if path is None or not path.is_file():
+            return None
+        try:
+            return parse(role_id, path.read_text(encoding="utf-8-sig"))  # a BOM from Notepad is fine
+        except (OSError, UnicodeDecodeError) as exc:
+            return Role(role_id, role_id, "", (), "", f"cannot read the file ({type(exc).__name__})")
+
+    def _write(self, role: Role) -> None:
+        self.folder.mkdir(parents=True, exist_ok=True)
+        path = self._path(role.id)
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(dump(role), encoding="utf-8")
+        os.replace(tmp, path)  # atomic, so a crash never leaves half a role file
+
+    def save(self, role_id: str | None, name: str, model: str, tools: list[str], instructions: str) -> Role:
+        """Creates a role (role_id None) or replaces an existing one. Raises RoleError."""
+        problem = check(name, model, tools, instructions)
+        if problem:
+            raise RoleError(problem)
+        if role_id is None:
+            role_id = make_id(name, self._taken())
+        elif self.get(role_id) is None:
+            raise RoleError("this role no longer exists")
+        # The CLI refuses to change a file the role has not read first, so Write and Edit bring Read.
+        if {"Write", "Edit"} & set(tools):
+            tools = [*tools, "Read"]
+        # Keep the catalog order, drop repeats, so the file reads the same every time.
+        role = Role(role_id, name.strip(), model, tuple(t for t in TOOL_CATALOG if t in tools), instructions.strip())
+        self._write(role)
+        return role
+
+    def copy(self, role_id: str) -> Role:
+        role = self.get(role_id)
+        if role is None:
+            raise RoleError("this role no longer exists")
+        if role.problem:
+            raise RoleError(f"fix this role first: {role.problem}")
+        return self.save(None, f"{role.name} (copy)"[:MAX_NAME], role.model, list(role.tools), role.instructions)
+
+    def delete(self, role_id: str) -> bool:
+        """Removes the role file only. Its folder (the role's work) and its chats are kept."""
+        path = self._path(role_id)
+        if path is None or not path.is_file():
+            return False
+        path.unlink()
+        return True

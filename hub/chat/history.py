@@ -38,7 +38,8 @@ CREATE TABLE IF NOT EXISTS chats (
     created_at REAL NOT NULL,
     updated_at REAL NOT NULL,
     session_id TEXT,             -- the session to resume next time
-    system_prompt TEXT           -- the personality prompt that session last followed
+    system_prompt TEXT,          -- the personality prompt that session last followed
+    role TEXT                    -- G-AGENT-3: the role id this chat talks to, NULL = plain chat
 );
 CREATE TABLE IF NOT EXISTS messages (
     id INTEGER PRIMARY KEY,
@@ -94,6 +95,8 @@ class HistoryStore:
                 db.execute("ALTER TABLE chats ADD COLUMN system_prompt TEXT")
             if "sources" not in {r[1] for r in db.execute("PRAGMA table_info(messages)")}:  # before M4
                 db.execute("ALTER TABLE messages ADD COLUMN sources TEXT NOT NULL DEFAULT '[]'")
+            if "role" not in cols:  # before Milestone 5
+                db.execute("ALTER TABLE chats ADD COLUMN role TEXT")
 
     def _conn(self) -> sqlite3.Connection:
         db = sqlite3.connect(self.path, timeout=10)
@@ -102,11 +105,12 @@ class HistoryStore:
         return db
 
     # ---- chats --------------------------------------------------------------------
-    def create_chat(self, first_text: str) -> dict[str, Any]:
+    def create_chat(self, first_text: str, role: str | None = None) -> dict[str, Any]:
+        """role: the role id for a role chat (G-AGENT-3). It is fixed for the chat's life."""
         now = time.time()
         with closing(self._conn()) as db, db:
-            cur = db.execute("INSERT INTO chats (title, created_at, updated_at) VALUES (?, ?, ?)",
-                             (make_title(first_text), now, now))
+            cur = db.execute("INSERT INTO chats (title, created_at, updated_at, role) VALUES (?, ?, ?, ?)",
+                             (make_title(first_text), now, now, role))
             return self.get_chat(cur.lastrowid, db)
 
     def get_chat(self, chat_id: int, db: sqlite3.Connection | None = None) -> dict[str, Any] | None:
@@ -118,7 +122,7 @@ class HistoryStore:
 
     def list_chats(self, query: str = "") -> list[dict[str, Any]]:
         """F-HIST-2 / F-HIST-3: newest first. A query matches the title or any message."""
-        sql = "SELECT id, title, created_at, updated_at FROM chats"
+        sql = "SELECT id, title, created_at, updated_at, role FROM chats"
         args: tuple = ()
         q = query.strip()
         if q:

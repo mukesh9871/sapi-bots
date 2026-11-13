@@ -93,9 +93,9 @@ The platform is one general engine: agents with roles, teams, tools, schedules a
 
 **Agents and roles**
 
-1. **G-AGENT-1:** An agent is a role definition: name, job description (its instructions), the tools it may use, and the model it runs on.
-2. **G-AGENT-2:** I can create, edit, copy and delete roles from the app, with no coding. Roles are stored as readable files.
-3. **G-AGENT-3:** Any single agent can be given a task directly from the chat window.
+1. **G-AGENT-1:** ✅ An agent is a role definition: name, job description (its instructions), the tools it may use, and the model it runs on.
+2. **G-AGENT-2:** ✅ I can create, edit, copy and delete roles from the app, with no coding. Roles are stored as readable files.
+3. **G-AGENT-3:** ✅ Any single agent can be given a task directly from the chat window.
 
 **Teams**
 
@@ -108,9 +108,9 @@ The platform is one general engine: agents with roles, teams, tools, schedules a
 
 **Tools and connectors**
 
-1. **G-TOOL-1:** A tool is one capability an agent can call: web search, read or write files in a project folder, post to a platform, fill a web form, start a ComfyUI render.
-2. **G-TOOL-2:** Each tool is marked read-only or acting. Acting tools change something outside the app (post, submit, send, delete).
-3. **G-TOOL-3:** A role gets only the tools listed in its definition; everything else is unavailable to it.
+1. **G-TOOL-1:** ✅ A tool is one capability an agent can call: web search, read or write files in a project folder, post to a platform, fill a web form, start a ComfyUI render.
+2. **G-TOOL-2:** ✅ Each tool is marked read-only or acting. Acting tools change something outside the app (post, submit, send, delete).
+3. **G-TOOL-3:** ✅ A role gets only the tools listed in its definition; everything else is unavailable to it.
 4. **G-TOOL-4:** New connectors can be added without changing the engine.
 
 **Approvals**
@@ -346,8 +346,8 @@ Build in three phases, each usable on its own. Phase 1 is Milestones 1 to 4 (the
 
 **Milestone 5: Roles and single agents**
 
-- [ ] I create a role in the app, give it a task from chat, and get its result.
-- [ ] A role can use only the tools its definition lists.
+- [x] I create a role in the app, give it a task from chat, and get its result.
+- [x] A role can use only the tools its definition lists.
 
 **Milestone 6: Approvals, log and budgets**
 

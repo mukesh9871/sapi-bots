@@ -14,8 +14,9 @@ boxes and ✅ marks there show what is built and tested.
 | 1. Core chat app | 1. Terminal chat | Done |
 | | 2. Desktop chat window | Done |
 | | 3. History and settings | Done |
-| | 4. Web search and polish | Ready to test |
-| 2. Generic platform | 5 to 8. Roles, approvals, log, budgets, teams, scheduler, packs | Not started |
+| | 4. Web search and polish | Done |
+| 2. Generic platform | 5. Roles and single agents | Ready to test |
+| | 6 to 8. Approvals, log, budgets, teams, scheduler, packs | Not started |
 | 3. Instruction packs | 9 to 13. Routines, social media, jobs, software team, video | Not started |
 
 ## What it does today
@@ -38,6 +39,10 @@ boxes and ✅ marks there show what is built and tested.
   still remembers it.
 - **Settings page (⚙):** bot name and avatar, theme (system, light or dark), default
   model, web search, editable built-in prompts, and Delete all history.
+- **Roles (agents):** the **Roles** button opens a page where you create, edit, copy
+  and delete roles: a name, a job description, a model and the tools it may use. Pick a
+  role in **Talk to** before the first message of a new chat (or press **Give it a
+  task** on the Roles page), and that chat runs as the role.
 - **Terminal chat** for quick use without the window.
 
 ## Requirements
@@ -121,6 +126,8 @@ Everything stays on your PC. None of these are committed to git.
 | Claude's own session files | `%USERPROFILE%\.claude\projects\<chat folder name>\*.jsonl` |
 | Claude's working folder for chat | `data/chat_workdir/` |
 | Exports | `exports/` |
+| Roles | `packs/local/roles/<id>.md` (readable, safe to edit by hand) |
+| Each role's working folder | `projects/role-<id>/` |
 
 **Settings in `config.json`:**
 
@@ -144,6 +151,24 @@ a chat, the app resumes that session. If the session file is gone, it starts a n
 and sends the last 40 messages from `chats.db` as background (marked as information,
 not instructions), with a note if older messages were left out.
 
+**A role file** looks like this. The header lists the model (blank = the Settings
+default) and the tools. The job description goes below it:
+
+```
+---
+name: Researcher
+model: sonnet
+tools: WebSearch, WebFetch, Read, Write
+---
+You research a topic on the web and write report.md in your folder.
+```
+
+Tools a role may list: `WebSearch`, `WebFetch` (read-only), `Read`, `Glob`, `Grep`
+(read-only, its own folder) and `Write`, `Edit` (change files in its own folder; they
+bring `Read` with them). A file that lists anything else (for example `Bash`) is marked
+"needs fixing" and never runs. Deleting a role keeps its chats (readable, not
+continuable) and its folder.
+
 Deleting a chat removes its rows in `chats.db` and its session files in this app's own
 folder under `.claude\projects`. It never touches your other Claude Code projects.
 
@@ -158,7 +183,14 @@ folder under `.claude\projects`. It never touches your other Claude Code project
   token that the browser receives once. Every request must carry it and pass Host and
   Origin checks, so other websites and other machines cannot use the hub.
 - **Limited tools.** In chat, Claude gets only web search and web fetch (when web is
-  on). Every other tool is removed and denied, and permission bypass mode is never used.
+  on). A role gets only the tools it lists. Every other tool is removed and denied, and
+  permission bypass mode is never used. There is no shell tool at all.
+- **A role stays in its folder.** A check before every tool call refuses file paths
+  outside `projects/role-<id>/` (`..`, other drives, network paths, links pointing out,
+  hidden characters) and refuses writing config files that coding agents or editors
+  read (`CLAUDE.md`, `AGENTS.md`, `.claude`, `.git`, `.vscode` and similar), Windows
+  shortcut-type files (`.url`, `.lnk`, `desktop.ini`) and files pytest would run
+  (`conftest.py`, `test_*.py`). `pytest.ini` also keeps pytest out of `projects/`.
 - **Web text is information, not instructions.**
 - Coming in Phase 2: every outside action (post, submit, send, delete) goes through an
   approval rule (Auto, Ask or Never) and is written to an append-only activity log.
@@ -172,9 +204,11 @@ hub/
   config.py          config.json load and save
   cli_chat.py        terminal chat (Milestone 1)
   chat/
-    claude_session.py  wraps the Agent SDK client, session resume, transcript files
+    claude_session.py  wraps the Agent SDK client, tool limits and folder check, transcripts
     history.py         SQLite chat store, search, replay text, Markdown export
     personalities.py   built-in prompts
+  engine/
+    roles.py           role files: read, check, save, copy, delete (Milestone 5)
   web/               index.html, app.css, app.js, vendor/ (marked, DOMPurify, highlight.js)
 scripts/usage_test.py  plan-usage measurement
 scripts/make_shortcut.ps1  creates the desktop shortcut
@@ -204,7 +238,7 @@ In PowerShell, use `$env:HUB_LIVE='1'` instead of `set HUB_LIVE=1`.
 - Offline tests use a temporary database and a fake Claude session. They never touch
   your real `data/chats.db`.
 - Live tests use your subscription (a few short messages, mostly on Haiku).
-- Current result: 130 passed (111 offline, 19 live).
+- Current result: 248 passed (226 offline, 22 live).
 
 ## Working rules for development
 

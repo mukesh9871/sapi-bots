@@ -132,3 +132,18 @@ dialog input.short { width: 5em; }
   #sidebar { position: fixed; z-index: 5; top: 0; bottom: 0; left: 0; transform: translateX(-100%); transition: transform .15s; }
   #sidebar.open { transform: none; box-shadow: 0 0 24px rgba(0,0,0,.3); }
 }
+
+/* Roles page (Milestone 5) */
+.roles-layout { display: flex; gap: 16px; align-items: flex-start; }
+.roles-side { width: 190px; flex-shrink: 0; display: flex; flex-direction: column; gap: 8px; }
+#role-list { list-style: none; margin: 0; padding: 0; max-height: 50vh; overflow-y: auto; }
+#role-list li { padding: 6px 8px; border-radius: 8px; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#role-list li:hover, #role-list li.active { background: var(--hover); }
+#role-list li.broken { color: var(--danger); }
+#role-form { flex: 1; min-width: 0; }
+#role-form input:not([type]), #role-form select { width: 100%; }
+#role-tools label { display: flex; gap: 8px; align-items: center; margin: 3px 0; }
+#role-tools .kind { font-size: 11.5px; color: var(--muted); border: 1px solid var(--border); border-radius: 6px; padding: 0 5px; }
+dialog menu .spacer { flex: 1; }
+.chat-role { color: var(--muted); }
+@media (max-width: 760px) { .roles-layout { flex-direction: column; } .roles-side { width: 100%; } }

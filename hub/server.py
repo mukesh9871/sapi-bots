@@ -1,4 +1,4 @@
-"""Local hub server: serves the chat window and streams replies (Milestones 2 and 3).
+"""Local hub server: serves the chat window and streams replies (Milestones 2 to 5).
 
 Run:  .venv\\Scripts\\python -m hub.server        (opens your browser)
 
@@ -37,6 +37,7 @@ from hub.auth_check import LOGIN_STEPS, LoginState, check_login, scrub_billing_e
 from hub.chat.claude_session import ChatSession, all_transcript_ids, delete_transcript, transcript_exists
 from hub.chat.history import HistoryStore
 from hub.chat.personalities import PERSONALITIES
+from hub.engine.roles import MODELS, TOOL_CATALOG, Role, RoleError, RoleStore
 
 WEB_DIR = Path(__file__).parent / "web"
 COOKIE = "hub_token"
@@ -68,6 +69,11 @@ class HubState:
     turn_chat_id: int | None = None  # the chat the running reply is for (while busy)
     closing_chat_id: int | None = None  # a chat whose Claude process is still shutting down
     stop_pending: bool = False  # Stop pressed during this turn, maybe before its session existed
+    roles: RoleStore | None = None  # Milestone 5
+
+
+class RoleUnavailable(Exception):
+    """A role chat whose role was deleted, or whose file is broken (hand edit)."""
 
 
 def _forbidden(reason: str) -> Response:
@@ -105,10 +111,12 @@ def validate_settings(body: dict[str, Any], current: dict[str, Any]) -> str | No
 
 def create_app(token: str, port: int, *, login: LoginState | None = None,
                notices: list[str] | None = None, check_login_on_start: bool = True,
-               history: HistoryStore | None = None) -> FastAPI:
+               history: HistoryStore | None = None, roles: RoleStore | None = None) -> FastAPI:
     state = HubState(token=token, port=port, login=login or LoginState(None), notices=notices or [],
-                     history=history or HistoryStore())
+                     history=history or HistoryStore(), roles=roles or RoleStore())
     store = state.history
+    role_store = state.roles
+    role_store.in_use = lambda: {c["role"] for c in store.list_chats() if c["role"]}  # review M5
     allowed_hosts = {f"127.0.0.1:{port}", f"localhost:{port}"}
     allowed_origins = {f"http://{h}" for h in allowed_hosts}
 
@@ -217,8 +225,20 @@ def create_app(token: str, port: int, *, login: LoginState | None = None,
         cfg = config.save(body)  # M3 check 3; applies from the next message (F-PERS-3)
         return {"settings": {k: cfg[k] for k in config.EDITABLE}}
 
-    def session_kwargs() -> dict[str, Any]:
+    def usable_role(role_id: str) -> Role:
+        role = role_store.get(role_id)
+        if role is None:
+            raise RoleUnavailable("role_missing")
+        if role.problem:
+            raise RoleUnavailable("role_broken")
+        return role
+
+    def session_kwargs(chat: dict[str, Any] | None = None) -> dict[str, Any]:
         cfg = config.load()
+        if chat and chat.get("role"):
+            # G-AGENT-3: a role chat runs as the role (its prompt, tools, folder and model).
+            # Personality and the web toggle do not apply. A blank role model uses Settings.
+            return {"role": usable_role(chat["role"]), "model": cfg["model"] or None}
         personality = cfg["personality"] if cfg["personality"] in PERSONALITIES else "straight"
         if cfg["personality"] == "custom" and cfg["custom_prompt"].strip():
             prompt = cfg["custom_prompt"]
@@ -253,7 +273,8 @@ def create_app(token: str, port: int, *, login: LoginState | None = None,
         """
         chat = store.get_chat(chat_id)
         sid = chat["session_id"]
-        if transcript_exists(sid):
+        role = kwargs.get("role")
+        if transcript_exists(sid, role.folder if role else None):  # a role's sessions live in its folder
             session = ChatSession(**kwargs, resume=sid, ctrl_c_shield=False)
             # A resumed session keeps the prompt it last followed. Only when the personality
             # changed since then, the new one travels with the next message (review M3).
@@ -283,6 +304,13 @@ def create_app(token: str, port: int, *, login: LoginState | None = None,
             return _bad("bad chat id")
         if chat_id is not None and store.get_chat(chat_id) is None:
             return _bad("this chat no longer exists", 404)
+        role_id = body.get("role") if chat_id is None else None  # an existing chat keeps its role
+        if role_id is not None:
+            role = role_store.get(role_id) if isinstance(role_id, str) else None
+            if role is None:
+                return _bad("this role no longer exists", 404)
+            if role.problem:
+                return _bad(f"this role cannot run: {role.problem}")
         if state.busy:
             return _bad("a reply is still streaming", 409)
         state.busy, state.turn_chat_id, state.stop_pending = True, chat_id, False
@@ -302,10 +330,10 @@ def create_app(token: str, port: int, *, login: LoginState | None = None,
                 if chat_id != state.chat_id:  # another chat (or a new one) gets its own session
                     await detach_session()
                 if chat_id is None:
-                    new = store.create_chat(text)  # F-HIST-2: title from the first words
+                    new = store.create_chat(text, role_id)  # F-HIST-2: title from the first words
                     chat_id, created = new["id"], True
-                    queue.put_nowait({"kind": "chat", "id": chat_id, "title": new["title"]})
-                kwargs = session_kwargs()
+                    queue.put_nowait({"kind": "chat", "id": chat_id, "title": new["title"], "role": role_id})
+                kwargs = session_kwargs(store.get_chat(chat_id))
                 fresh, note = None, ""
                 if state.session is None:
                     # Decide resume or replay before saving this message, so it is not replayed too.
@@ -358,6 +386,9 @@ def create_app(token: str, port: int, *, login: LoginState | None = None,
                         if ev.kind == "text":
                             reply.append(ev.text)
                         queue.put_nowait({"kind": ev.kind, "text": ev.text, "data": ev.data})
+            except RoleUnavailable as exc:
+                failed = True
+                queue.put_nowait({"kind": "error", "code": str(exc), "detail": ""})
             except Exception as exc:  # N-REL-1: plain message instead of a crash
                 failed = True
                 queue.put_nowait({"kind": "error", "code": "exception", "detail": type(exc).__name__})
@@ -478,7 +509,10 @@ def create_app(token: str, port: int, *, login: LoginState | None = None,
 
     @app.post("/api/chats/{chat_id}/export")
     async def export_chat(chat_id: int):  # F-HIST-5
-        path = store.export_markdown(chat_id, bot_name=config.load()["bot_name"])
+        chat = store.get_chat(chat_id)
+        role = role_store.get(chat["role"]) if chat and chat["role"] else None
+        name = role.name if role else (chat["role"] if chat and chat["role"] else config.load()["bot_name"])
+        path = store.export_markdown(chat_id, bot_name=name)
         if path is None:
             return _bad("chat not found", 404)
         return {"ok": True, "path": str(path)}
@@ -494,6 +528,51 @@ def create_app(token: str, port: int, *, login: LoginState | None = None,
             await detach_session()
             ids = store.delete_all() + all_transcript_ids()  # also old transcripts no chat refers to
         return {"ok": True, **await forget_sessions(ids)}
+
+    # ---- roles (Milestone 5, G-AGENT-1, G-AGENT-2) --------------------------------------
+    def role_fields(body: dict[str, Any] | None) -> tuple | None:
+        if body is None:
+            return None
+        return (body.get("name", ""), body.get("model", ""), body.get("tools", []), body.get("instructions", ""))
+
+    @app.get("/api/roles")
+    async def list_roles() -> dict[str, Any]:
+        return {"roles": [r.to_dict() for r in role_store.list()], "tools": TOOL_CATALOG, "models": list(MODELS)}
+
+    @app.post("/api/roles")
+    async def create_role(request: Request):
+        fields = role_fields(await read_json(request))
+        if fields is None:
+            return _bad("bad request")
+        try:
+            return {"role": role_store.save(None, *fields).to_dict()}
+        except RoleError as exc:
+            return _bad(str(exc))
+
+    @app.put("/api/roles/{role_id}")
+    async def update_role(role_id: str, request: Request):
+        # Takes effect from the role's next message in each chat (the session restarts).
+        fields = role_fields(await read_json(request))
+        if fields is None:
+            return _bad("bad request")
+        try:
+            return {"role": role_store.save(role_id, *fields).to_dict()}
+        except RoleError as exc:
+            return _bad(str(exc), 404 if "no longer exists" in str(exc) else 400)
+
+    @app.post("/api/roles/{role_id}/copy")
+    async def copy_role(role_id: str):
+        try:
+            return {"role": role_store.copy(role_id).to_dict()}
+        except RoleError as exc:
+            return _bad(str(exc), 404 if "no longer exists" in str(exc) else 400)
+
+    @app.delete("/api/roles/{role_id}")
+    async def delete_role(role_id: str):
+        # Keeps the role's chats (readable, not continuable) and its folder (its work).
+        if not role_store.delete(role_id):
+            return _bad("role not found", 404)
+        return {"ok": True}
 
     return app
 

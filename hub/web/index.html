@@ -14,6 +14,7 @@
     <!-- Left sidebar: New chat, search, past chats (F-HIST-2, F-HIST-3) -->
     <aside id="sidebar">
       <button type="button" id="new-chat">+ New chat</button>
+      <button type="button" id="open-roles" class="ghost" title="Create and edit roles (agents)">Roles</button>
       <input type="search" id="search" placeholder="Search chats" aria-label="Search chats">
       <ul id="chat-list" aria-label="Past chats"></ul>
       <div id="chat-list-empty" class="muted small" hidden>No chats yet.</div>
@@ -24,11 +25,15 @@
         <button type="button" id="toggle-sidebar" class="ghost icon" title="Chats" aria-label="Show chats">☰</button>
         <div class="title" id="chat-title">New chat</div>
         <div class="controls">
-          <label>Personality
+          <!-- G-AGENT-3: a new chat talks to plain Chat or to one role; fixed once the chat starts -->
+          <label>Talk to
+            <select id="talk-to"><option value="">Chat</option></select>
+          </label>
+          <label id="personality-box">Personality
             <select id="personality"></select>
           </label>
           <button type="button" id="edit-custom" class="ghost" hidden>Edit prompt</button>
-          <label>Model
+          <label id="model-box">Model
             <select id="model">
               <option value="">Plan default</option>
               <option value="haiku">Haiku (fast)</option>
@@ -36,7 +41,7 @@
               <option value="opus">Opus (strongest)</option>
             </select>
           </label>
-          <label class="toggle"><input type="checkbox" id="web"> Web search</label>
+          <label class="toggle" id="web-box"><input type="checkbox" id="web"> Web search</label>
           <button type="button" id="export" class="ghost" hidden title="Save this chat as a Markdown file">Export</button>
           <button type="button" id="open-settings" class="ghost icon" title="Settings" aria-label="Settings">⚙</button>
         </div>
@@ -142,6 +147,49 @@
         <button type="submit" id="settings-save">Save</button>
       </menu>
     </form>
+  </dialog>
+
+  <!-- Roles page (Milestone 5, G-AGENT-1, G-AGENT-2): saved as files in packs\local\roles -->
+  <dialog id="roles-dialog" class="wide">
+    <div class="roles-layout">
+      <div class="roles-side">
+        <h2>Roles</h2>
+        <ul id="role-list" aria-label="Roles"></ul>
+        <div id="role-list-empty" class="muted small" hidden>No roles yet.</div>
+        <button type="button" id="role-new">+ New role</button>
+      </div>
+      <form id="role-form" method="dialog">
+        <div id="role-problem" class="error-text" hidden></div>
+        <label class="block">Name <input id="role-name" maxlength="40" required></label>
+        <label class="block">Model
+          <select id="role-model">
+            <option value="">Default from Settings</option>
+            <option value="haiku">Haiku (fast)</option>
+            <option value="sonnet">Sonnet</option>
+            <option value="opus">Opus (strongest)</option>
+          </select>
+        </label>
+        <fieldset>
+          <legend>Tools it may use</legend>
+          <p class="hint">Only the ticked tools are available to this role. File tools work only inside its own folder. Creating or changing files also ticks reading them.</p>
+          <div id="role-tools"></div>
+        </fieldset>
+        <label class="block">Job description (its instructions)
+          <textarea id="role-instructions" rows="9" maxlength="20000" required
+            placeholder="What this role does, how it works, and what it should hand back."></textarea>
+        </label>
+        <p class="hint" id="role-folder"></p>
+        <div id="role-error" class="error-text" hidden></div>
+        <menu>
+          <button type="button" id="role-delete" class="danger">Delete</button>
+          <button type="button" id="role-copy" class="ghost">Copy</button>
+          <span class="spacer"></span>
+          <button type="button" id="role-close" class="ghost">Close</button>
+          <button type="button" id="role-task" class="ghost" title="Save, then start a new chat with this role">Give it a task</button>
+          <button type="submit" id="role-save">Save</button>
+        </menu>
+      </form>
+    </div>
   </dialog>
 
   <script src="/static/vendor/marked.min.js"></script>
