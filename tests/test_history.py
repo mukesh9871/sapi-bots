@@ -50,6 +50,22 @@ def test_search_title_and_messages(store):  # F-HIST-3
     assert store.list_chats("nothing-like-this") == []
 
 
+def test_search_matches_word_starts_only(store):  # F-HIST-3: "hi" must not find "this"
+    hi = store.create_chat("Hi")
+    hist = store.create_chat("History of Rome")
+    other = store.create_chat("Schedule a task")
+    store.add_message(other["id"], "bot", "Sure, this is which way to do it.")
+    found = {c["id"] for c in store.list_chats("hi")}
+    assert found == {hi["id"], hist["id"]}
+    assert [c["id"] for c in store.list_chats("WAY TO")] == [other["id"]]  # phrase, any case
+    assert store.list_chats("chedule") == []  # inside a word: no match
+
+
+def test_search_without_spaces_keeps_substring(store):  # F-HIST-3: Chinese/Japanese have no spaces
+    c = store.create_chat("你好世界")
+    assert [x["id"] for x in store.list_chats("世界")] == [c["id"]]
+
+
 def test_search_wildcards_are_literal(store):  # "%" must not match everything
     store.create_chat("plain")
     c = store.create_chat("50% off")

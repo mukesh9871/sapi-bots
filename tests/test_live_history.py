@@ -4,6 +4,7 @@
 - F-HIST-4: continue a chat whose SDK transcript is gone (replay)
 - M3 check 4: deleting a chat removes its transcript from disk (D-2)
 - F-HIST-1: a stopped reply is saved too
+- Switching chats mid-reply: other chats stay usable, the reply is still saved
 """
 
 import http.client
@@ -140,3 +141,36 @@ def test_stopped_reply_is_saved(app):  # F-HIST-1, F-CHAT-4
     msgs = HistoryStore(db).messages(chat_id_of(events))
     assert [m["role"] for m in msgs] == ["user", "bot"]
     assert msgs[1]["status"] == "stopped" and msgs[1]["text"] == reply_of(events)
+
+
+def test_other_chat_usable_while_reply_streams(app):  # F-HIST-2/F-HIST-4 while busy, N-PERF-3
+    """The window may switch chats mid-reply: reading, renaming and deleting another chat
+    must work, deleting the replying chat must not, and the reply is still saved to its chat."""
+    start, db = app
+    port = start()
+    other = HistoryStore(db).create_chat("an older chat")
+    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=180)
+    conn.request("POST", "/api/chat", body=json.dumps({"text": "Count from 1 to 40, one number per line."}),
+                 headers={"Host": f"127.0.0.1:{port}", "Origin": own(port),
+                          "Cookie": f"hub_token={TOKEN}", "Content-Type": "application/json"})
+    resp = conn.getresponse()
+    events, checked = [], False
+    for line in resp:  # keep reading the stream, like the window does in the background
+        events.append(json.loads(line))
+        if not checked and events[-1]["kind"] == "text":
+            checked = True
+            busy_id = chat_id_of(events)
+            r, d = request(port, "GET", f"/api/chats/{other['id']}")
+            assert r.status == 200 and json.loads(d)["chat"]["title"] == "an older chat"
+            r, _ = request(port, "PATCH", f"/api/chats/{other['id']}", origin=own(port), body={"title": "renamed"})
+            assert r.status == 200
+            r, _ = request(port, "DELETE", f"/api/chats/{busy_id}", origin=own(port))
+            assert r.status == 409  # the replying chat cannot be deleted
+            r, _ = request(port, "DELETE", f"/api/chats/{other['id']}", origin=own(port))
+            assert r.status == 200
+    conn.close()
+    assert checked and [e for e in events if e["kind"] == "done"], events[-1]
+    msgs = HistoryStore(db).messages(busy_id)
+    assert [m["role"] for m in msgs] == ["user", "bot"] and msgs[1]["text"] == reply_of(events)
+    r, _ = request(port, "POST", "/api/new", origin=own(port))  # what the window sends after a background reply
+    assert r.status == 200

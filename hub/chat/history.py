@@ -56,6 +56,15 @@ CREATE INDEX IF NOT EXISTS messages_chat ON messages(chat_id, id);
 """
 
 
+def _word_start(query: str) -> re.Pattern[str]:
+    """F-HIST-3: "hi" matches at the start of a word ("Hi", "history"), not inside one ("this").
+    A query that starts with a symbol ("%") or a non-ASCII letter keeps plain substring matching:
+    scripts such as Chinese or Japanese put no spaces between words (review M3)."""
+    if query[:1].isascii() and query[:1].isalnum():
+        return re.compile(r"(?<!\w)" + re.escape(query), re.IGNORECASE)
+    return re.compile(re.escape(query), re.IGNORECASE)
+
+
 def make_title(text: str) -> str:
     """F-HIST-2: first words of the first message, no Claude call."""
     words = " ".join(text.split())
@@ -100,13 +109,16 @@ class HistoryStore:
         """F-HIST-2 / F-HIST-3: newest first. A query matches the title or any message."""
         sql = "SELECT id, title, created_at, updated_at FROM chats"
         args: tuple = ()
-        if query.strip():
-            # Escape LIKE wildcards so "50%" means the text "50%".
-            like = "%" + re.sub(r"([\\%_])", r"\\\1", query.strip()) + "%"
-            sql += (" WHERE title LIKE ? ESCAPE '\\' OR id IN "
-                    "(SELECT chat_id FROM messages WHERE text LIKE ? ESCAPE '\\')")
+        q = query.strip()
+        if q:
+            # LIKE is the fast pre-filter. Escape its wildcards so "50%" means the text "50%".
+            like = "%" + re.sub(r"([\\%_])", r"\\\1", q) + "%"
+            sql += (" WHERE (title LIKE ? ESCAPE '\\' AND word_match(title)) OR id IN "
+                    "(SELECT chat_id FROM messages WHERE text LIKE ? ESCAPE '\\' AND word_match(text))")
             args = (like, like)
         with closing(self._conn()) as db:
+            pattern = _word_start(q)
+            db.create_function("word_match", 1, lambda s: bool(pattern.search(s or "")), deterministic=True)
             return [dict(r) for r in db.execute(sql + " ORDER BY updated_at DESC, id DESC", args)]
 
     def rename(self, chat_id: int, title: str) -> bool:

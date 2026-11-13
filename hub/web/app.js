@@ -20,6 +20,9 @@ let builtinPrompts = {};
 let streaming = false;
 let currentChatId = null; // null = a new chat that is not saved yet
 let switching = false; // New chat or delete in flight: no sending until it is done (review M3)
+// The reply in flight: { chatId, title, bot }. It keeps streaming (and is saved by the server)
+// while another chat is on screen. Only one runs at a time (N-PERF-3: one live Claude process).
+let turn = null;
 
 // N-REL-1 / R-AUTH-4 / R-AUTH-6: plain words for errors.
 const ERRORS = {
@@ -120,12 +123,27 @@ function scrollDown(force) {
 function setStreaming(on) {
   streaming = on;
   els.send.hidden = on; els.stop.hidden = !on;
-  els.newChat.disabled = on;
-  els.chatList.classList.toggle("locked", on);
+  // Sidebar and New chat stay usable: switching chats mid-reply is allowed.
   if (!on) { els.activity.hidden = true; els.input.focus(); }
 }
 
 function setActivity(text) { els.activity.textContent = text; els.activity.hidden = !text; }
+
+// Is the running reply on screen? Switching away detaches its element, switching back re-attaches it.
+function turnVisible() { return !!turn && els.messages.contains(turn.bot.div); }
+// The chat an openChat is heading to (undefined = none). During that switch the old screen is
+// still in the DOM but about to go, so judge "on screen" against where the switch lands (review M3).
+let switchTarget = undefined;
+function turnOnScreen() {
+  return turnVisible() && (switchTarget === undefined || switchTarget === turn.chatId);
+}
+
+// After a switch: say where the reply is still being written, so Stop makes sense.
+function showTurnActivity() {
+  if (!turn) return;
+  if (turnVisible()) setActivity(turn.bot.text ? "" : "thinking…");
+  else setActivity(`Still answering in "${turn.title}"…`);
+}
 
 function setCurrentChat(id, title) {
   currentChatId = id;
@@ -136,14 +154,15 @@ function setCurrentChat(id, title) {
 
 // ---------- send / stream ----------
 async function send(text) {
-  if (streaming || switching || !text.trim()) return;
+  if (streaming || switching || closing || !text.trim()) return;
   addUserMessage(text);
   const bot = addBotMessage();
+  turn = { chatId: currentChatId, title: els.title.textContent, bot };
   setStreaming(true);
   setActivity("thinking…");
 
   let rafId = 0; // queued redraw, 0 = none
-  const render = () => { rafId = 0; bot.body.innerHTML = renderMarkdown(bot.text); scrollDown(); };
+  const render = () => { rafId = 0; bot.body.innerHTML = renderMarkdown(bot.text); if (turnVisible()) scrollDown(); };
   let errorShown = false;
 
   try {
@@ -171,30 +190,36 @@ async function send(text) {
         const ev = JSON.parse(line);
         if (ev.kind === "text") {
           bot.text += ev.text;
-          setActivity("");
+          if (turnVisible()) setActivity("");
           if (!rafId) rafId = requestAnimationFrame(render);
         } else if (ev.kind === "chat") {
-          setCurrentChat(ev.id, ev.title); // F-HIST-1: the new chat is saved now
+          turn.chatId = ev.id; turn.title = ev.title;
+          // F-HIST-1: the new chat is saved now. Only take over the screen if it is still shown.
+          if (turnVisible()) setCurrentChat(ev.id, ev.title);
+          else if (currentChatId === ev.id) reloadChat(ev.id); // opened from the sidebar before this event
+          else showTurnActivity();
           refreshChats();
         } else if (ev.kind === "chat_removed") {
           // The first message failed, so the server dropped the empty chat; Retry starts a new one.
           if (currentChatId === ev.id) setCurrentChat(null);
+          turn.chatId = null;
           refreshChats();
         } else if (ev.kind === "note") {
-          addChatNote(ev.text, bot.div); // F-HIST-4: restored from saved history
+          turn.note = ev.text; // kept, so a switch back during the reply shows it again
+          if (turnVisible()) addChatNote(ev.text, bot.div); // F-HIST-4: restored from saved history
         } else if (ev.kind === "tool") {
-          setActivity(ev.text === "WebSearch" ? "searching the web…" : ev.text === "WebFetch" ? "reading a page…" : `using ${ev.text}…`);
+          if (turnVisible()) setActivity(ev.text === "WebSearch" ? "searching the web…" : ev.text === "WebFetch" ? "reading a page…" : `using ${ev.text}…`);
         } else if (ev.kind === "status") {
           showStatus(ev);
         } else if (ev.kind === "error") {
-          showError(bot, ev, text); errorShown = true;
+          turn.error = showError(bot, ev, text); errorShown = true;
         } else if (ev.kind === "done" && String(ev.terminal_reason || "").startsWith("aborted")) {
           addNote(bot, "(stopped)");
         }
       }
     }
   } catch (err) {
-    showError(bot, { code: err.code || "network", detail: err.message }, text); errorShown = true;
+    turn.error = showError(bot, { code: err.code || "network", detail: err.message }, text); errorShown = true;
   }
 
   // Cancel any queued redraw first: it would run after enhanceCode and wipe the
@@ -202,8 +227,86 @@ async function send(text) {
   if (rafId) cancelAnimationFrame(rafId);
   finishBot(bot);
   if (!bot.text && !errorShown) addNote(bot, "(no reply)");
+  const attached = turnOnScreen(), done = turn;
+  // Its chat may be on screen without the live element (opened just as the reply was saved).
+  // null === null: a new chat that was never saved (or was removed), and a new-chat screen is shown.
+  const screenId = switchTarget !== undefined ? switchTarget : currentChatId;
+  const onScreen = attached || done.chatId === screenId;
+  turn = null;
   setStreaming(false);
+  if (errorShown && attached) {
+    // R-AUTH-6: the error box with Retry is on screen; also keep the text in the input box.
+    // A draft is being typed: also store it, or a switch away would lose it with the box.
+    if (!els.input.value) { els.input.value = text; autoGrow(); } else addRetry(done.chatId, text);
+  } else if (errorShown) {
+    // R-AUTH-6: the error box is not visible. Keep the text for that chat (null = a new chat
+    // that was removed), say why, and give it back once that chat is on screen.
+    addRetry(done.chatId, text);
+    const where = done.chatId === null ? "Press New chat" : "Open that chat";
+    flash(`The reply in "${done.title}" failed: ${done.error}${onScreen ? "" : ` ${where} to get your message back.`}`, true);
+    if (onScreen && done.chatId !== null) reloadChat(done.chatId); // redraw also gives the text back
+    else if (onScreen && switchTarget === undefined) applyPendingRetry(null); // new-chat screen
+  } else {
+    if (!onScreen && done.chatId !== null) flash(`Reply finished in "${done.title}".`);
+    // Not attached but its chat is (or is about to be) on screen: the reply is saved, so redraw.
+    if (!attached && done.chatId !== null) reloadChat(done.chatId);
+  }
+  if (!onScreen) closeIdle(done.chatId); // N-PERF-3: the finished chat is not on screen
   refreshChats(); // this chat moves to the top
+}
+
+// N-PERF-3: close the idle Claude process of a chat that is not on screen. `closing` blocks
+// sending and makes switches wait while the server closes it (it is busy meanwhile, review M3).
+// If a switch is running, close when that switch ends (it may land on that very chat).
+let closing = null; // promise while /api/new runs
+let closeAfterSwitch = undefined; // chat id waiting for the close, undefined = none
+let reloadAfterSwitch = undefined; // chat id to redraw once the switch ends
+function closeIdle(chatId) {
+  if (switching) { closeAfterSwitch = chatId; return; }
+  closing = api("POST", "/api/new").catch(() => { /* the next message closes it anyway */ })
+    .finally(() => { closing = null; });
+}
+// Redraw the open chat from saved history (its reply finished without being on screen).
+function reloadChat(id) {
+  if (switching) { reloadAfterSwitch = id; return; }
+  if (id === currentChatId) openChat(id, true);
+}
+// Called once openChat, New chat or a delete has finished (switching is false again).
+function afterSwitch() {
+  const close = closeAfterSwitch, reload = reloadAfterSwitch;
+  closeAfterSwitch = reloadAfterSwitch = undefined;
+  if (close !== undefined && !turn && close !== currentChatId) closeIdle(close);
+  if (reload !== undefined && reload === currentChatId) openChat(reload, true);
+}
+
+// R-AUTH-6: messages whose reply failed while their chat was off screen, by chat id. One goes
+// back into the input box when its chat (or, for a removed new chat, New chat) is opened.
+const pendingRetries = new Map(); // chat id (null = removed new chat) -> [texts]
+function addRetry(chatId, text) {
+  pendingRetries.set(chatId, [...(pendingRetries.get(chatId) || []), text]);
+}
+function takeRetry(chatId, text) { // remove one stored copy of text
+  const list = pendingRetries.get(chatId) || [];
+  const i = list.indexOf(text);
+  if (i >= 0) list.splice(i, 1);
+  if (!list.length) pendingRetries.delete(chatId);
+}
+function applyPendingRetry(chatId) {
+  for (const text of [...(pendingRetries.get(chatId) || [])]) {
+    els.empty.hidden = true;
+    if (!els.input.value) { // empty box: put it straight back
+      els.input.value = text; autoGrow(); takeRetry(chatId, text);
+      addChatNote("Your last message was not answered. It is back in the box below, ready to send again.");
+      continue;
+    }
+    // Never overwrite what is being typed: offer it instead. Kept until it is put back.
+    const n = document.createElement("div"); n.className = "chat-note";
+    n.textContent = `A message was not answered: "${text.length > 80 ? text.slice(0, 80) + "…" : text}" `;
+    const b = document.createElement("button"); b.type = "button"; b.className = "ghost"; b.textContent = "Put it back";
+    b.onclick = () => { els.input.value = text; autoGrow(); takeRetry(chatId, text); n.remove(); els.input.focus(); };
+    n.appendChild(b);
+    els.messages.appendChild(n);
+  }
 }
 
 function addNote(bot, text) {
@@ -218,11 +321,17 @@ function showError(bot, ev, originalText) {
   const box = document.createElement("div"); box.className = "error";
   box.textContent = msg;
   const retry = document.createElement("button"); retry.textContent = "Retry";
-  retry.onclick = () => { if (!streaming) { box.remove(); send(originalText); } };
+  retry.onclick = () => {
+    if (streaming || switching || closing) return;
+    box.remove();
+    takeRetry(currentChatId, originalText); // sent again, so no stored copy is offered later
+    send(originalText);
+  };
   box.appendChild(retry);
   bot.div.appendChild(box);
-  // R-AUTH-6: keep the typed message so it is not lost.
-  if (!els.input.value) els.input.value = originalText;
+  // R-AUTH-6: the typed message goes back into the input box at the end of send(), once it
+  // is known which chat is on screen (a switch may be running now, review M3).
+  return msg;
 }
 
 // ---------- history sidebar (F-HIST-2, F-HIST-3, F-HIST-4) ----------
@@ -265,28 +374,42 @@ function chatItem(c) {
   return li;
 }
 
-async function openChat(id) {
-  if (streaming || switching || id === currentChatId) return;
+// reload = redraw the chat already on screen (its reply finished while not attached).
+async function openChat(id, reload = false) {
+  if (closing) await closing; // the server is busy closing an idle process
+  if (switching || (id === currentChatId && !reload)) return;
   switching = true; // no sending until the chat is on screen (review M3)
+  switchTarget = id;
   try {
     const { chat, messages } = await api("GET", `/api/chats/${id}`);
     // N-PERF-3: only the open chat keeps a live Claude process, so close the old one now.
-    await api("POST", "/api/new").catch(() => {});
+    // Not during a reply: its process is still working (the server would refuse anyway).
+    // Not on a reload: the process belongs to this very chat.
+    if (!turn && !reload) await api("POST", "/api/new").catch(() => {});
     clearMessages();
     for (const m of messages) {
       if (m.role === "user") { addUserMessage(m.text); continue; }
       const bot = addBotMessage(); bot.text = m.text; finishBot(bot);
       if (m.status === "stopped") addNote(bot, "(stopped)");
     }
+    // Back to the chat that is still replying: re-attach the live reply under its question.
+    // If the last saved message is already the reply, it finished meanwhile: do not show it twice.
+    if (turn && turn.chatId === chat.id && messages.at(-1)?.role === "user") {
+      els.messages.appendChild(turn.bot.div);
+      if (turn.note) addChatNote(turn.note, turn.bot.div); // F-HIST-4 "restored" note
+    }
     els.empty.hidden = messages.length > 0;
     setCurrentChat(chat.id, chat.title);
+    applyPendingRetry(chat.id);
+    showTurnActivity();
     scrollDown(true);
     els.sidebar.classList.remove("open");
     els.input.focus();
   } catch (err) {
     flash(`Could not open the chat: ${err.message}.`, true);
     refreshChats();
-  } finally { switching = false; }
+  } finally { switching = false; switchTarget = undefined; }
+  afterSwitch();
 }
 
 // Right-click (or ⋯) menu: rename, export, delete.
@@ -344,16 +467,20 @@ function startRename(c) {
 }
 
 async function deleteChat(c) {
-  if (c.id === currentChatId && streaming) return;
+  if (turn && c.id === turn.chatId) { flash("Wait for the reply in this chat to finish, or press Stop.", true); return; }
   if (!confirm(`Delete "${c.title}"? This also deletes its saved transcript and cannot be undone.`)) return;
+  if (closing) await closing;
+  if (switching) return; // another switch is running; never clear its flag early
   switching = true;
   try {
     const res = await api("DELETE", `/api/chats/${c.id}`);
     if (c.id === currentChatId) { clearMessages(); setCurrentChat(null); }
+    pendingRetries.delete(c.id);
     if (res.transcripts_failed) flash("Chat deleted, but its transcript file could not be removed (another program may have it open).", true);
     else flash("Chat deleted.");
   } catch (err) { flash(`Could not delete: ${err.message}.`, true); }
   finally { switching = false; }
+  afterSwitch();
   refreshChats();
 }
 
@@ -489,28 +616,37 @@ els.settingsBtn.onclick = openSettings;
 $("delete-all").onclick = () => { $("delete-all").hidden = true; $("delete-all-confirm").hidden = false; };
 $("delete-all-no").onclick = () => { $("delete-all").hidden = false; $("delete-all-confirm").hidden = true; };
 $("delete-all-yes").onclick = async () => {
+  if (closing) await closing;
+  if (switching) return;
   switching = true;
   try {
     const res = await api("POST", "/api/history/delete-all", { confirm: "DELETE" });
-    clearMessages(); setCurrentChat(null);
+    clearMessages(); setCurrentChat(null); pendingRetries.clear();
     els.settingsDialog.close();
     if (res.transcripts_failed) flash(`All chats deleted, but ${res.transcripts_failed} transcript files could not be removed (another program may have them open).`, true);
     else flash("All history deleted.");
   } catch (err) {
     const box = $("settings-error"); box.textContent = `Could not delete: ${err.message}.`; box.hidden = false;
   } finally { switching = false; }
+  afterSwitch();
   $("delete-all").hidden = false; $("delete-all-confirm").hidden = true;
   refreshChats();
 };
 
 // ---------- new chat ----------
 els.newChat.onclick = async () => {
-  if (streaming || switching) return;
-  switching = true;
-  try { await api("POST", "/api/new"); } catch { return; } // server kept the old chat (still busy)
-  finally { switching = false; }
+  if (closing) await closing; // the server is busy closing an idle process
+  if (switching) return;
+  if (!turn) { // during a reply its process keeps working; it is closed when the reply ends
+    switching = true;
+    try { await api("POST", "/api/new"); } catch { return; } // server kept the old chat (still busy)
+    finally { switching = false; }
+  }
   clearMessages();
   setCurrentChat(null);
+  applyPendingRetry(null); // a failed first message of a removed new chat
+  showTurnActivity();
+  afterSwitch();
   els.sidebar.classList.remove("open");
   els.input.focus();
 };
@@ -519,7 +655,7 @@ els.newChat.onclick = async () => {
 els.composer.onsubmit = (e) => {
   e.preventDefault();
   const text = els.input.value;
-  if (!text.trim() || streaming || switching) return;
+  if (!text.trim() || streaming || switching || closing) return;
   els.input.value = ""; autoGrow();
   send(text);
 };

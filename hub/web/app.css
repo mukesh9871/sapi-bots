@@ -50,7 +50,6 @@ select, input { background: var(--panel); border: 1px solid var(--border); borde
 #chat-list .more { background: none; color: var(--muted); padding: 0 6px; visibility: hidden; }
 #chat-list li:hover .more, #chat-list li.active .more { visibility: visible; }
 #chat-list input { width: 100%; }
-#chat-list.locked li { cursor: default; opacity: .7; }
 #toggle-sidebar { display: none; }
 
 /* right-click menu */
