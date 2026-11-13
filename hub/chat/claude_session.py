@@ -14,7 +14,11 @@ from __future__ import annotations
 
 import ctypes
 import dataclasses
+import os
+import re
+import shutil
 import sys
+import uuid
 import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -54,6 +58,52 @@ DENIED_TOOLS = [
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 CHAT_WORKDIR = PROJECT_ROOT / "data" / "chat_workdir"  # empty folder, N-SEC-5
+
+
+# ---- SDK transcripts (F-HIST-4, D-2) -----------------------------------------------
+# The CLI writes each session to ~/.claude/projects/<chat folder, non-alphanumerics as "-">/<id>.jsonl.
+# We work out that folder ourselves instead of using the SDK's delete_session: given a folder,
+# the SDK also searches its git worktrees, and the chat folder sits inside this git repo, so
+# it could reach the repo's own Claude Code transcripts. Here a delete can only touch
+# <uuid>.jsonl files in the chat transcript folder.
+
+def transcript_dir() -> Path:
+    base = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
+    return base / "projects" / re.sub(r"[^A-Za-z0-9]", "-", str(CHAT_WORKDIR.resolve()))
+
+
+def _transcript_path(session_id: str) -> Path | None:
+    try:
+        uuid.UUID(session_id)  # never build a path from anything but a UUID
+    except (ValueError, TypeError, AttributeError):
+        return None
+    return transcript_dir() / f"{session_id}.jsonl"
+
+
+def transcript_exists(session_id: str | None) -> bool:
+    path = _transcript_path(session_id) if session_id else None
+    return bool(path and path.is_file() and path.stat().st_size > 0)
+
+
+def delete_transcript(session_id: str) -> bool:
+    """D-2: remove a session's transcript and its subagent folder. True if a file was removed."""
+    path = _transcript_path(session_id)
+    if path is None:
+        return False
+    removed = False
+    try:
+        path.unlink()
+        removed = True
+    except FileNotFoundError:
+        pass
+    shutil.rmtree(path.with_suffix(""), ignore_errors=True)  # sibling <id>/ folder, often absent
+    return removed
+
+
+def all_transcript_ids() -> list[str]:
+    """D-3: every session in the chat transcript folder (it is used only by this chat app)."""
+    folder = transcript_dir()
+    return [p.stem for p in folder.glob("*.jsonl") if _transcript_path(p.stem)] if folder.is_dir() else []
 
 
 def build_options(
@@ -106,11 +156,18 @@ class Event:
 class ChatSession:
     """One conversation = one SDK client. Context is kept across `send` calls (F-CHAT-2)."""
 
-    def __init__(self, **option_kwargs: Any):
+    def __init__(self, *, ctrl_c_shield: bool = True, **option_kwargs: Any):
+        # ctrl_c_shield: keep claude.exe alive when Ctrl+C is pressed in our console. The terminal
+        # chat needs it (there Ctrl+C means "stop this reply"). The server turns it off: there
+        # Ctrl+C means "quit", and while the shield is up our own process ignores Ctrl+C too,
+        # so a press during Claude's start-up would be lost (found in M3 testing).
+        self.ctrl_c_shield = ctrl_c_shield
         self.option_kwargs = option_kwargs
         self.options = build_options(**option_kwargs)
         self.client = ClaudeSDKClient(self.options)
-        self.session_id: str | None = None
+        # F-HIST-4: a reopened chat starts by resuming its stored session.
+        self.session_id: str | None = option_kwargs.get("resume")
+        self.pending_replay: str | None = None  # saved history to send when the transcript is gone
         self.api_key_source: str | None = None
         self.init_tools: list[str] = []
         self.last_rate_limit: dict[str, Any] | None = None
@@ -129,7 +186,7 @@ class ChatSession:
         # Windows sends console Ctrl+C to every process on the console, so claude.exe
         # would exit and the chat would die. Children inherit the "ignore Ctrl+C" flag,
         # so set it only while the child starts, then restore it for our own Stop handler.
-        if sys.platform == "win32":
+        if sys.platform == "win32" and self.ctrl_c_shield:
             kernel32 = ctypes.windll.kernel32
             kernel32.SetConsoleCtrlHandler(None, True)
             try:
@@ -199,12 +256,18 @@ class ChatSession:
                 "From now on, follow these instructions instead of the earlier ones:\n"
                 f"{self.pending_personality}]\n\n{text}"
             )
+        if self.pending_replay:
+            # F-HIST-4: the old transcript is gone, so the saved messages travel with this one.
+            text = f"{self.pending_replay}\n\n{text}"
         try:
             await self.client.query(text)
         except CLIConnectionError:
             await self._reconnect()
             await self.client.query(text)  # same message, nothing lost
         self.query_sent = True
+        # The replay is in the new transcript now that Claude has the message, even if the reply
+        # fails, is stopped or the CLI dies before a result, so never send it twice (review M3 round 4).
+        self.pending_replay = None
         if self.stop_requested:
             self.stop_requested = False
             await self.client.interrupt()

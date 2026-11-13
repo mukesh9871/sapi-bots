@@ -46,3 +46,36 @@ def test_permission_callback_denies_everything_else(tmp_path):  # N-SEC-3 layer 
     for tool in DENIED_TOOLS:
         assert verdict(tool) == "PermissionResultDeny"
     assert verdict("SomeFutureTool") == "PermissionResultDeny"
+
+
+def test_replay_is_cleared_once_claude_has_the_message():  # review M3 round 4: never sent twice
+    import asyncio
+
+    from hub.chat.claude_session import ChatSession
+
+    class DyingClient:
+        sent = []
+
+        async def query(self, text):
+            self.sent.append(text)
+
+        def receive_response(self):
+            async def gen():
+                raise RuntimeError("CLI died before a result")
+                yield
+            return gen()
+
+    async def run():
+        s = ChatSession(web_enabled=False)
+        s.client = DyingClient()
+        s.pending_replay = "[restored history]"
+        for _ in range(2):
+            try:
+                async for _ev in s.send("hi"):
+                    pass
+            except RuntimeError:
+                pass
+        return DyingClient.sent
+
+    sent = asyncio.run(run())
+    assert sent[0].startswith("[restored history]") and "[restored history]" not in sent[1]

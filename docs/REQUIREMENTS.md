@@ -34,14 +34,14 @@ The app must run entirely on my Claude subscription by using the Claude Agent SD
 
 **Requirements**
 
-1. **R-AUTH-1:** The app authenticates only through the Claude Code login (`claude`, then sign in with "Claude account with subscription").
-2. **R-AUTH-2:** The app never asks for, stores or uses an Anthropic API key.
-3. **R-AUTH-3:** On startup, the app checks that the `ANTHROPIC_API_KEY` environment variable is not set. If it is set, the app removes it from its own process before starting the SDK and shows a notice, because the key would switch billing to the API. The same check covers the Bedrock and Vertex switches.
-4. **R-AUTH-4:** If the user is not logged in, show a clear message with the steps to log in, instead of a raw error.
-5. **R-AUTH-5:** The app does not extract, copy or reuse the login token outside the official SDK.
+1. **R-AUTH-1:** ✅ The app authenticates only through the Claude Code login (`claude`, then sign in with "Claude account with subscription").
+2. **R-AUTH-2:** ✅ The app never asks for, stores or uses an Anthropic API key.
+3. **R-AUTH-3:** ✅ On startup, the app checks that the `ANTHROPIC_API_KEY` environment variable is not set. If it is set, the app removes it from its own process before starting the SDK and shows a notice, because the key would switch billing to the API. The same check covers the Bedrock and Vertex switches.
+4. **R-AUTH-4:** ✅ If the user is not logged in, show a clear message with the steps to log in, instead of a raw error.
+5. **R-AUTH-5:** ✅ The app does not extract, copy or reuse the login token outside the official SDK.
 6. **R-AUTH-6:** When the subscription usage limit is reached, show a friendly message with the time it resets (if available), and keep the typed message so it is not lost.
 7. **R-AUTH-7:** The app is for one person, me. It is never shared, hosted or handed to others with my login: Anthropic does not allow developers to offer claude.ai login or rate limits to other people's products unless approved ([source](https://code.claude.com/docs/en/agent-sdk/overview)).
-8. **R-AUTH-8:** On startup the app confirms that the session is using the subscription login and not a key, where the SDK reports it, and shows the result in the status line.
+8. **R-AUTH-8:** ✅ On startup the app confirms that the session is using the subscription login and not a key, where the SDK reports it, and shows the result in the status line.
 9. **R-AUTH-9:** Platform connectors (YouTube, Instagram, X, job sites) sign in with those platforms' own keys or logins. These are not Anthropic keys, they are billed (if at all) by that platform, and they are stored as N-SEC-6 requires.
 10. **R-AUTH-10:** Teams and scheduled runs use the same subscription limits as chat. Budgets (G-BUDGET-1) and the pause switch (G-BUDGET-2) keep them from using the whole limit.
 
@@ -51,27 +51,27 @@ The app must let me chat, pick a personality, keep history, and search the web; 
 
 **Chat**
 
-1. **F-CHAT-1:** Type a message and get a reply that streams in word by word.
-2. **F-CHAT-2:** Keep context within a conversation, so follow-up questions work.
-3. **F-CHAT-3:** Show replies with Markdown formatting: headings, lists, tables, and code blocks with syntax highlighting and a Copy button.
-4. **F-CHAT-4:** A Stop button to cancel a reply that is still generating.
+1. **F-CHAT-1:** ✅ Type a message and get a reply that streams in word by word.
+2. **F-CHAT-2:** ✅ Keep context within a conversation, so follow-up questions work.
+3. **F-CHAT-3:** ✅ Show replies with Markdown formatting: headings, lists, tables, and code blocks with syntax highlighting and a Copy button.
+4. **F-CHAT-4:** ✅ A Stop button to cancel a reply that is still generating.
 5. **F-CHAT-5:** (Later) Regenerate the last reply, and edit then resend my last message. Both need the session rewound by one turn, so they are not in version 1.
-6. **F-CHAT-6:** Choose the model (for example a faster model for quick chat, a stronger model for hard questions), limited to what my plan allows.
+6. **F-CHAT-6:** ✅ Choose the model (for example a faster model for quick chat, a stronger model for hard questions), limited to what my plan allows.
 
 **Personality**
 
-1. **F-PERS-1:** Built-in modes: "Fun" (witty, sarcastic, jokes), "Straight" (direct, no jokes), and "Explainer" (patient, step by step).
-2. **F-PERS-2:** A custom mode where I write my own system prompt, saved for reuse.
-3. **F-PERS-3:** Switch modes at any time; the new mode applies from the next message.
-4. **F-PERS-4:** I can give the bot a custom name and avatar.
+1. **F-PERS-1:** ✅ Built-in modes: "Fun" (witty, sarcastic, jokes), "Straight" (direct, no jokes), and "Explainer" (patient, step by step).
+2. **F-PERS-2:** ✅ A custom mode where I write my own system prompt, saved for reuse.
+3. **F-PERS-3:** ✅ Switch modes at any time; the new mode applies from the next message.
+4. **F-PERS-4:** ✅ I can give the bot a custom name and avatar.
 
 **History**
 
-1. **F-HIST-1:** Every conversation is saved automatically on my PC.
-2. **F-HIST-2:** A sidebar lists past chats, newest first, titled from the first words of my first message (no extra Claude call).
-3. **F-HIST-3:** Rename, delete, and search chats by keyword.
-4. **F-HIST-4:** Reopen an old chat and continue it with its context. The app stores the SDK session ID for each chat and resumes it; if that session file is gone, it replays the saved messages into a new session.
-5. **F-HIST-5:** Export a chat to Markdown.
+1. **F-HIST-1:** ✅ Every conversation is saved automatically on my PC.
+2. **F-HIST-2:** ✅ A sidebar lists past chats, newest first, titled from the first words of my first message (no extra Claude call).
+3. **F-HIST-3:** ✅ Rename, delete, and search chats by keyword.
+4. **F-HIST-4:** ✅ Reopen an old chat and continue it with its context. The app stores the SDK session ID for each chat and resumes it; if that session file is gone, it replays the saved messages into a new session.
+5. **F-HIST-5:** ✅ Export a chat to Markdown.
 
 **Web search**
 
@@ -207,18 +207,18 @@ The app should start quickly, stay private on my PC, and fail with clear message
 | N-PERF-1 | Speed | App window opens in under 5 seconds on a normal PC. |
 | N-PERF-2 | Speed | The first words of a reply start streaming within a few seconds (depends on Claude's servers). |
 | N-REL-1 | Reliability | Network errors, timeouts and usage-limit messages are shown in plain words, with a Retry button. |
-| N-REL-2 | Reliability | A crash or closed window never loses saved chat history. |
-| N-SEC-1 | Security | The app listens only on `127.0.0.1` (localhost), never on the network, unless I turn on phone access later. |
+| N-REL-2 ✅ | Reliability | A crash or closed window never loses saved chat history. |
+| N-SEC-1 ✅ | Security | The app listens only on `127.0.0.1` (localhost), never on the network, unless I turn on phone access later. |
 | N-SEC-2 | Security | No telemetry or analytics sent anywhere except the Claude requests themselves. |
-| N-SEC-3 | Security | In plain chat, the bot's available tool set is only web search and web fetch; a role in a pack gets only the tools its definition lists (G-TOOL-3). Tools a role does not list (in plain chat: shell, file-write and file-edit) are removed from the set and also blocked by deny rules, because an allow-list alone only pre-approves tools. Permission bypass mode is never used. |
-| N-USE-1 | Usability | Works with mouse and keyboard; Enter sends, Shift+Enter makes a new line. |
-| N-USE-2 | Usability | Light and dark theme, following the system setting. |
-| N-MAINT-1 | Maintainability | Settings (personality, model, toggles) live in one readable config file. |
+| N-SEC-3 ✅ | Security | In plain chat, the bot's available tool set is only web search and web fetch; a role in a pack gets only the tools its definition lists (G-TOOL-3). Tools a role does not list (in plain chat: shell, file-write and file-edit) are removed from the set and also blocked by deny rules, because an allow-list alone only pre-approves tools. Permission bypass mode is never used. |
+| N-USE-1 ✅ | Usability | Works with mouse and keyboard; Enter sends, Shift+Enter makes a new line. |
+| N-USE-2 ✅ | Usability | Light and dark theme, following the system setting. |
+| N-MAINT-1 ✅ | Maintainability | Settings (personality, model, toggles) live in one readable config file. |
 | N-MAINT-2 | Maintainability | Code is small and commented, so I can change it myself. |
 | N-PORT-1 | Portability | Runs on Windows 10 or 11; ideally also on macOS and Linux with no code changes. |
-| N-SEC-4 | Security | The local server accepts requests only from its own window: a random token created at each launch, plus Origin and Host checks, so a website open in my browser cannot talk to the bot. |
-| N-SEC-5 | Security | Chat runs in its own empty working folder, each team in its own project folder, and neither loads my Claude Code settings, memory files or skills, so my coding setup cannot change the bot and the bot cannot see my projects. |
-| N-PERF-3 | Speed | Only the open chat keeps a live Claude Code process; idle ones are closed, and reopening a chat resumes its session. |
+| N-SEC-4 ✅ | Security | The local server accepts requests only from its own window: a random token created at each launch, plus Origin and Host checks, so a website open in my browser cannot talk to the bot. |
+| N-SEC-5 ✅ | Security | Chat runs in its own empty working folder, each team in its own project folder, and neither loads my Claude Code settings, memory files or skills, so my coding setup cannot change the bot and the bot cannot see my projects. |
+| N-PERF-3 ✅ | Speed | Only the open chat keeps a live Claude Code process; idle ones are closed, and reopening a chat resumes its session. |
 | N-SEC-6 | Security | Platform logins and keys are kept in the operating system's credential store (Windows Credential Manager), never in config files, logs or chat, and are never shown to an agent; connectors use them on the agent's behalf. |
 | N-SEC-7 | Security | Text that an agent reads from a web page, job listing, comment or file is treated as information, never as an instruction; an acting tool call still has to pass its approval rule. |
 | N-REL-3 | Reliability | An acting tool call is never repeated blindly after a crash or retry: the log is checked first, so nothing is posted or submitted twice. |
@@ -283,10 +283,10 @@ App data stays in one local folder on my PC, plus a transcript of each chat that
 | My resume and job profile | \<app folder>/packs/jobs/profile/ | Documents I provide | Sent only to Claude for tailoring and to the job sites I apply to |
 
 1. **D-1:** No chat data leaves the PC except the messages sent to Claude to get replies.
-2. **D-2:** Deleting a chat removes it from the database and deletes its SDK session transcript.
-3. **D-3:** A "Delete all history" option in Settings, with a confirmation step.
-4. **D-4:** Backing up the app folder backs up every chat. On a new PC, restored chats continue by replaying their saved messages (F-HIST-4).
-5. **D-5:** The app's database is the source of truth for history; SDK transcripts are only a resume aid ([where the SDK stores sessions](https://code.claude.com/docs/en/agent-sdk/sessions)).
+2. **D-2:** ✅ Deleting a chat removes it from the database and deletes its SDK session transcript.
+3. **D-3:** ✅ A "Delete all history" option in Settings, with a confirmation step.
+4. **D-4:** ✅ Backing up the app folder backs up every chat. On a new PC, restored chats continue by replaying their saved messages (F-HIST-4).
+5. **D-5:** ✅ The app's database is the source of truth for history; SDK transcripts are only a resume aid ([where the SDK stores sessions](https://code.claude.com/docs/en/agent-sdk/sessions)).
 
 ## Risks and limitations
 
@@ -311,30 +311,32 @@ The biggest risks are subscription limits under team and scheduled use, platform
 
 ## Milestones and acceptance criteria
 
+A ✅ next to a requirement ID, or a ticked box below, means it is built and tested.
+
 Build in three phases, each usable on its own. Phase 1 is Milestones 1 to 4 (the chat app), Phase 2 is Milestones 5 to 8 (the generic platform), and Phase 3 adds one pack per milestone.
 
 **Milestone 1: Working chat in the terminal**
 
-- [ ] Claude Code installed and logged in with my subscription; `/status` shows the plan, not "API".
-- [ ] A script sends a message through the Agent SDK and prints a streamed reply.
-- [ ] Multi-turn context works (a follow-up question is answered correctly).
-- [ ] The startup check removes the key and shows a notice when `ANTHROPIC_API_KEY` is set.
-- [ ] Asking the bot to run a command or write a file fails, because those tools are not available.
-- [ ] A 20-message test chat shows how much of my usage limit it consumes.
+- [x] Claude Code installed and logged in with my subscription; `/status` shows the plan, not "API".
+- [x] A script sends a message through the Agent SDK and prints a streamed reply.
+- [x] Multi-turn context works (a follow-up question is answered correctly).
+- [x] The startup check removes the key and shows a notice when `ANTHROPIC_API_KEY` is set.
+- [x] Asking the bot to run a command or write a file fails, because those tools are not available.
+- [x] A 20-message test chat shows how much of my usage limit it consumes.
 
 **Milestone 2: Desktop chat window**
 
-- [ ] Chat window with streaming replies, Markdown, Copy and Stop buttons.
-- [ ] Personality selector with the three built-in modes and a custom prompt.
-- [ ] Status line shows the sign-in state.
-- [ ] A request to the local server without the launch token is rejected.
+- [x] Chat window with streaming replies, Markdown, Copy and Stop buttons.
+- [x] Personality selector with the three built-in modes and a custom prompt.
+- [x] Status line shows the sign-in state.
+- [x] A request to the local server without the launch token is rejected.
 
 **Milestone 3: History and settings**
 
-- [ ] Chats saved locally, listed in the sidebar, searchable, renamable and deletable.
-- [ ] Closing and reopening the app keeps all chats; an old chat can be continued.
-- [ ] Settings page saves to `config.json`.
-- [ ] Deleting a chat also removes its SDK transcript from disk.
+- [x] Chats saved locally, listed in the sidebar, searchable, renamable and deletable.
+- [x] Closing and reopening the app keeps all chats; an old chat can be continued.
+- [x] Settings page saves to `config.json`.
+- [x] Deleting a chat also removes its SDK transcript from disk.
 
 **Milestone 4: Web search and polish**
 

@@ -10,6 +10,7 @@ import pytest
 from helpers.hubhttp import TOKEN, free_port, own, request, start_server
 from hub import config
 from hub.auth_check import LoginState
+from hub.chat.history import HistoryStore
 from hub.server import COOKIE, create_app, make_server
 
 
@@ -99,8 +100,9 @@ def test_unknown_personality_rejected(server):
     assert resp.status == 400
 
 
-def test_binds_localhost_only():  # N-SEC-1
-    assert make_server(create_app("t", 1, check_login_on_start=False), 1).config.host == "127.0.0.1"
+def test_binds_localhost_only(tmp_path):  # N-SEC-1
+    app = create_app("t", 1, check_login_on_start=False, history=HistoryStore(tmp_path / "chats.db"))
+    assert make_server(app, 1).config.host == "127.0.0.1"
 
 
 @pytest.mark.parametrize("body", [

@@ -2,7 +2,10 @@
 
 Starts the real server, has one chat turn (so a claude.exe child exists), then presses
 Ctrl+C on the console. Logs the claude.exe child PIDs and how main() ended.
-argv: <log file> <config file> [busy]   (busy = press Ctrl+C while a long reply streams)
+argv: <log file> <config file> [idle|busy|starting]
+  idle     = after a full reply
+  busy     = while a long reply streams
+  starting = while Claude is still starting (M3: this press used to be lost)
 """
 
 import ctypes
@@ -20,6 +23,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from hub import config  # noqa: E402
 
 config.CONFIG_PATH = Path(sys.argv[2])
+from hub.chat import history  # noqa: E402
+
+history.DB_PATH = Path(sys.argv[2]).with_name("chats.db")  # never the real data/chats.db
 import hub.server as hub_server  # noqa: E402
 
 k32 = ctypes.windll.kernel32
@@ -44,18 +50,20 @@ def driver():
         time.sleep(0.1)
     u = urlparse(captured["url"])
     token, port = parse_qs(u.query)["token"][0], u.port
-    busy = len(sys.argv) > 3 and sys.argv[3] == "busy"
-    text = "Write a 1500-word story about a lighthouse." if busy else "Reply with only OK."
+    mode = sys.argv[3] if len(sys.argv) > 3 else "idle"
+    text = "Reply with only OK." if mode == "idle" else "Write a 1500-word story about a lighthouse."
     conn = http.client.HTTPConnection("127.0.0.1", port, timeout=300)
     conn.request("POST", "/api/chat", body=json.dumps({"text": text}),
                  headers={"Host": f"127.0.0.1:{port}", "Origin": f"http://127.0.0.1:{port}",
                           "Cookie": f"hub_token={token}", "Content-Type": "application/json"})
     resp = conn.getresponse()
-    if busy:
-        for _ in range(3):
-            resp.fp.readline()  # reply is streaming
-    else:
+    if mode == "idle":
         resp.read()
+    else:
+        # Read events until the trigger: the new-chat event (sent before Claude starts) or the first text.
+        want = "chat" if mode == "starting" else "text"
+        while json.loads(resp.readline())["kind"] != want:
+            pass
     log("pids", *child_claude_pids())
     captured["t0"] = time.time()
     k32.GenerateConsoleCtrlEvent(0, 0)  # Ctrl+C, as if pressed in the terminal

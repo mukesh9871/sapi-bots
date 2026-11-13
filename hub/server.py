@@ -1,4 +1,4 @@
-"""Local hub server: serves the chat window and streams replies (Milestone 2).
+"""Local hub server: serves the chat window and streams replies (Milestones 2 and 3).
 
 Run:  .venv\\Scripts\\python -m hub.server        (opens your browser)
 
@@ -32,11 +32,14 @@ from fastapi.staticfiles import StaticFiles
 
 from hub import config
 from hub.auth_check import LOGIN_STEPS, LoginState, check_login, scrub_billing_env, status_line
-from hub.chat.claude_session import ChatSession
+from hub.chat.claude_session import ChatSession, all_transcript_ids, delete_transcript, transcript_exists
+from hub.chat.history import HistoryStore
 from hub.chat.personalities import PERSONALITIES
 
 WEB_DIR = Path(__file__).parent / "web"
 COOKIE = "hub_token"
+MAX_PROMPT = 20_000  # characters, for any personality prompt
+THEMES = ("system", "light", "dark")
 
 SECURITY_HEADERS = {
     "Content-Security-Policy": (
@@ -58,15 +61,52 @@ class HubState:
     login_checked: bool = False
     session: ChatSession | None = None
     busy: bool = False  # a reply is streaming
+    history: HistoryStore | None = None
+    chat_id: int | None = None  # the chat the live session belongs to (None = none yet)
+    turn_chat_id: int | None = None  # the chat the running reply is for (while busy)
+    closing_chat_id: int | None = None  # a chat whose Claude process is still shutting down
+    stop_pending: bool = False  # Stop pressed during this turn, maybe before its session existed
 
 
 def _forbidden(reason: str) -> Response:
     return JSONResponse({"error": reason}, status_code=403, headers=SECURITY_HEADERS)
 
 
+def _bad(reason: str, code: int = 400) -> Response:
+    return JSONResponse({"error": reason}, status_code=code)
+
+
+def validate_settings(body: dict[str, Any], current: dict[str, Any]) -> str | None:
+    """Returns the problem with a settings change, or None. A bad value must never break later chats."""
+    if any(k in body and not isinstance(body[k], config.TYPES[k]) for k in config.EDITABLE):
+        return "bad settings value"
+    if body.get("personality") not in (None, *PERSONALITIES, "custom"):
+        return "unknown personality"
+    if body.get("model") not in (None, "", "haiku", "sonnet", "opus"):
+        return "unknown model"
+    if body.get("theme") not in (None, *THEMES):
+        return "unknown theme"
+    if "bot_name" in body and not 0 < len(body["bot_name"].strip()) <= 40:
+        return "bot name must be 1 to 40 characters"
+    if "avatar" in body and not 0 < len(body["avatar"].strip()) <= 8:
+        return "avatar must be an emoji or up to 4 letters"
+    prompts = body.get("prompts", {})
+    if any(k not in PERSONALITIES or not isinstance(v, str) or len(v) > MAX_PROMPT for k, v in prompts.items()):
+        return "bad personality prompt"
+    if len(body.get("custom_prompt", "")) > MAX_PROMPT:
+        return "custom prompt is too long"
+    merged = {**current, **body}
+    if merged["personality"] == "custom" and not merged["custom_prompt"].strip():
+        return "custom personality needs a prompt"
+    return None
+
+
 def create_app(token: str, port: int, *, login: LoginState | None = None,
-               notices: list[str] | None = None, check_login_on_start: bool = True) -> FastAPI:
-    state = HubState(token=token, port=port, login=login or LoginState(None), notices=notices or [])
+               notices: list[str] | None = None, check_login_on_start: bool = True,
+               history: HistoryStore | None = None) -> FastAPI:
+    state = HubState(token=token, port=port, login=login or LoginState(None), notices=notices or [],
+                     history=history or HistoryStore())
+    store = state.history
     allowed_hosts = {f"127.0.0.1:{port}", f"localhost:{port}"}
     allowed_origins = {f"http://{h}" for h in allowed_hosts}
 
@@ -85,8 +125,7 @@ def create_app(token: str, port: int, *, login: LoginState | None = None,
         yield
         if login_task:
             login_task.cancel()
-        if state.session:
-            await state.session.close()
+        await detach_session()
 
     app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
     app.state.hub = state
@@ -148,6 +187,7 @@ def create_app(token: str, port: int, *, login: LoginState | None = None,
             "busy": state.busy,
             "notices": state.notices,
             "personalities": sorted(PERSONALITIES) + ["custom"],
+            "builtin_prompts": PERSONALITIES,  # for "reset to default" on the settings page
             "settings": {k: cfg[k] for k in config.EDITABLE},
         }
 
@@ -161,72 +201,176 @@ def create_app(token: str, port: int, *, login: LoginState | None = None,
     @app.post("/api/settings")
     async def post_settings(request: Request) -> dict[str, Any]:
         body = await read_json(request)
-        # Check types, so a bad value can never break every later chat.
-        if body is None or any(
-            k in body and not isinstance(body[k], config.TYPES[k]) for k in config.EDITABLE
-        ):
-            return JSONResponse({"error": "bad settings value"}, status_code=400)
-        if body.get("personality") not in (None, *PERSONALITIES, "custom"):
-            return JSONResponse({"error": "unknown personality"}, status_code=400)
-        if body.get("model") not in (None, "", "haiku", "sonnet", "opus"):
-            return JSONResponse({"error": "unknown model"}, status_code=400)
-        merged = {**config.load(), **body}
-        if merged["personality"] == "custom" and not merged["custom_prompt"].strip():
-            return JSONResponse({"error": "custom personality needs a prompt"}, status_code=400)
-        cfg = config.save(body)  # applies from the next message (F-PERS-3)
+        if body is None:
+            return _bad("bad settings value")
+        problem = validate_settings(body, config.load())
+        if problem:
+            return _bad(problem)
+        if "prompts" in body:
+            # An empty prompt means "use the built-in text again".
+            body["prompts"] = {k: v for k, v in body["prompts"].items() if v.strip()}
+        for key in ("bot_name", "avatar"):
+            if key in body:
+                body[key] = body[key].strip()
+        cfg = config.save(body)  # M3 check 3; applies from the next message (F-PERS-3)
         return {"settings": {k: cfg[k] for k in config.EDITABLE}}
 
     def session_kwargs() -> dict[str, Any]:
         cfg = config.load()
-        custom = cfg["personality"] == "custom" and cfg["custom_prompt"].strip()
+        personality = cfg["personality"] if cfg["personality"] in PERSONALITIES else "straight"
+        if cfg["personality"] == "custom" and cfg["custom_prompt"].strip():
+            prompt = cfg["custom_prompt"]
+        else:
+            prompt = cfg["prompts"].get(personality)  # edited built-in prompt, or None = built-in text
         return {
-            "personality": cfg["personality"] if cfg["personality"] in PERSONALITIES else "straight",
-            "custom_prompt": cfg["custom_prompt"] if custom else None,
+            "personality": personality,
+            "custom_prompt": prompt or None,
             "model": cfg["model"] or None,
             "web_enabled": bool(cfg["web_enabled"]),
         }
+
+    async def detach_session() -> None:
+        """Close the live Claude process (N-PERF-3). Detach first, so nothing reuses it while it closes."""
+        if state.session:
+            # Clear both before the await: a message arriving during close() must start fresh,
+            # never reuse this chat id with a new process (review M3 finding 1).
+            old, closing = state.session, state.chat_id
+            state.session, state.chat_id, state.closing_chat_id = None, None, closing
+            try:
+                await old.close()
+            except Exception:
+                pass  # already gone
+            finally:
+                if state.closing_chat_id == closing:
+                    state.closing_chat_id = None
+
+    def open_session(chat_id: int, kwargs: dict[str, Any]) -> tuple[ChatSession, str]:
+        """F-HIST-4: resume the chat's stored session, or replay its saved messages if that is gone.
+
+        Returns the session (not yet connected) and a note for the window ("" = nothing to say).
+        """
+        chat = store.get_chat(chat_id)
+        sid = chat["session_id"]
+        if transcript_exists(sid):
+            session = ChatSession(**kwargs, resume=sid, ctrl_c_shield=False)
+            # A resumed session keeps the prompt it last followed. Only when the personality
+            # changed since then, the new one travels with the next message (review M3).
+            if chat["system_prompt"] != session.options.system_prompt:
+                session.pending_personality = session.options.system_prompt
+            return session, ""
+        session = ChatSession(**kwargs, ctrl_c_shield=False)  # Ctrl+C in the server window means quit
+        replay, left_out = store.replay_text(chat_id)
+        if not replay:
+            return session, ""
+        session.pending_replay = replay
+        note = "Restored this chat from saved history."
+        if left_out:
+            note += f" The {left_out} oldest messages were left out to save usage."
+        return session, note
 
     @app.post("/api/chat")
     async def chat(request: Request):
         body = await read_json(request)
         if body is None:
-            return JSONResponse({"error": "bad request"}, status_code=400)
+            return _bad("bad request")
         text = str(body.get("text", "")).strip()
         if not text:
-            return JSONResponse({"error": "empty message"}, status_code=400)
+            return _bad("empty message")
+        chat_id = body.get("chat_id")  # None = start a new chat
+        if chat_id is not None and (not isinstance(chat_id, int) or isinstance(chat_id, bool)):
+            return _bad("bad chat id")
+        if chat_id is not None and store.get_chat(chat_id) is None:
+            return _bad("this chat no longer exists", 404)
         if state.busy:
-            return JSONResponse({"error": "a reply is still streaming"}, status_code=409)
-        state.busy = True
+            return _bad("a reply is still streaming", 409)
+        state.busy, state.turn_chat_id, state.stop_pending = True, chat_id, False
 
         queue: asyncio.Queue[dict | None] = asyncio.Queue()
 
         async def run_turn() -> None:
-            # Runs on its own task, so a closed tab never leaves half-read SDK messages behind.
+            # Runs on its own task, so a closed tab never leaves half-read SDK messages behind
+            # and the reply is still saved.
+            nonlocal chat_id
+            reply: list[str] = []
+            stopped = failed = False
+            user_msg = None
+            created = False  # this turn created the chat
             try:
+                if chat_id != state.chat_id:  # another chat (or a new one) gets its own session
+                    await detach_session()
+                if chat_id is None:
+                    new = store.create_chat(text)  # F-HIST-2: title from the first words
+                    chat_id, created = new["id"], True
+                    queue.put_nowait({"kind": "chat", "id": chat_id, "title": new["title"]})
                 kwargs = session_kwargs()
+                fresh, note = None, ""
                 if state.session is None:
-                    state.session = ChatSession(**kwargs)
-                    await state.session.connect()
+                    # Decide resume or replay before saving this message, so it is not replayed too.
+                    fresh, note = open_session(chat_id, kwargs)
+                user_msg = store.add_message(chat_id, "user", text)  # N-REL-2: saved before sending
+                if fresh is not None:
+                    state.session, state.chat_id = fresh, chat_id  # set first, so Stop can reach it
+                    fresh.stop_requested = state.stop_pending  # Stop pressed while the old chat closed
+                    try:
+                        await fresh.connect()
+                    except Exception:
+                        state.session, state.chat_id = None, None  # never keep a half-started process
+                        raise
+                    if note:
+                        queue.put_nowait({"kind": "note", "text": note})
                 else:
-                    state.session.stop_requested = False  # a stale Stop must not hit this turn
+                    # A stale Stop from an earlier turn must not hit this one, but this turn's must.
+                    state.session.stop_requested = state.stop_pending
                     await state.session.reconfigure(**kwargs)
-                async for ev in state.session.send(text):
+                session = state.session
+                async for ev in session.send(text):
                     if ev.kind == "init":
+                        if session.session_id:
+                            # Known early, for D-2. A session started without resume got the current
+                            # system prompt at launch, so record it now: a failed turn must not leave
+                            # the old chat's prompt on record for the new session (review M3 round 4).
+                            launched = None if getattr(session.options, "resume", None) else session.options.system_prompt
+                            store.set_session(chat_id, session.session_id, launched)
                         queue.put_nowait({"kind": "status", **current_status()})
                     elif ev.kind == "done":
                         d = ev.data
+                        if session.session_id:
+                            # The prompt counts as delivered only when the turn went through.
+                            prompt = None if d["is_error"] else session.options.system_prompt
+                            store.set_session(chat_id, session.session_id, prompt)
+                        stopped = str(d["terminal_reason"] or "").startswith("aborted")
                         queue.put_nowait({"kind": "done", "subtype": d["subtype"],
                                           "terminal_reason": d["terminal_reason"], "usage": d["usage"]})
                     elif ev.kind == "error":
+                        failed = True
                         queue.put_nowait({"kind": "error", "code": ev.text,
-                                          "rate_limit": state.session.last_rate_limit})
+                                          "rate_limit": session.last_rate_limit})
                     else:
+                        if ev.kind == "text":
+                            reply.append(ev.text)
                         queue.put_nowait({"kind": ev.kind, "text": ev.text, "data": ev.data})
             except Exception as exc:  # N-REL-1: plain message instead of a crash
+                failed = True
                 queue.put_nowait({"kind": "error", "code": "exception", "detail": type(exc).__name__})
             finally:
-                state.busy = False
-                queue.put_nowait(None)
+                try:
+                    if reply:  # F-HIST-1: the reply is saved, a stopped one too
+                        store.add_message(chat_id, "bot", "".join(reply), "stopped" if stopped else "")
+                    elif failed and user_msg is not None:
+                        # No reply: the window puts the message back in the input box for Retry,
+                        # so drop it here, or a retry would save it twice.
+                        store.delete_message(user_msg)
+                    gone = store.delete_if_empty(chat_id) if created and failed and not reply else None
+                    if gone is not None:
+                        # Its first message failed: no empty titled chat is left in the sidebar.
+                        # Close its process first, then remove its transcripts (D-2).
+                        if state.chat_id == chat_id:
+                            await detach_session()
+                        await forget_sessions(gone)
+                        queue.put_nowait({"kind": "chat_removed", "id": chat_id})
+                finally:
+                    state.busy = False
+                    queue.put_nowait(None)
 
         turn = asyncio.create_task(run_turn())
 
@@ -237,31 +381,110 @@ def create_app(token: str, port: int, *, login: LoginState | None = None,
                     yield json.dumps(item, default=str) + "\n"
                 finished = True
             finally:
-                if not finished and state.session and not turn.done():
+                if not finished and not turn.done():
                     # Tab closed mid-reply. This scope is already cancelled, so shield the stop,
                     # or it is cancelled before it reaches Claude (found in review, tested).
-                    with anyio.CancelScope(shield=True):
-                        await state.session.stop()
+                    state.stop_pending = True  # also covers a session that does not exist yet
+                    if state.session:
+                        with anyio.CancelScope(shield=True):
+                            await state.session.stop()
 
         return StreamingResponse(stream(), media_type="application/x-ndjson")
 
     @app.post("/api/stop")
     async def stop() -> dict[str, bool]:  # F-CHAT-4
-        if state.busy and state.session:
+        if not state.busy:
+            return {"stopped": False}
+        state.stop_pending = True  # if the session is not started yet, run_turn passes this on
+        if state.session:
             await state.session.stop()
-            return {"stopped": True}
-        return {"stopped": False}
+        return {"stopped": True}
+
+    @asynccontextmanager
+    async def exclusive():
+        """Hold the busy flag while a process closes, so no message can slip in (review M3 finding 1)."""
+        state.busy = True
+        try:
+            yield
+        finally:
+            state.busy = False
 
     @app.post("/api/new")
     async def new_chat() -> dict[str, bool]:
         if state.busy:
-            return JSONResponse({"error": "a reply is still streaming"}, status_code=409)
-        if state.session:
-            # Detach first, so a message sent while this closes starts a fresh session
-            # instead of reusing the closing one (found in review).
-            old, state.session = state.session, None
-            await old.close()  # N-PERF-3: no idle Claude process kept around
+            return _bad("a reply is still streaming", 409)
+        async with exclusive():
+            await detach_session()  # N-PERF-3: no idle Claude process kept around
         return {"ok": True}
+
+    # ---- history (Milestone 3) -------------------------------------------------------
+    @app.get("/api/chats")
+    async def list_chats(q: str = "") -> dict[str, Any]:  # F-HIST-2, F-HIST-3
+        return {"chats": store.list_chats(q)}
+
+    @app.get("/api/chats/{chat_id}")
+    async def get_chat(chat_id: int):  # F-HIST-4: reopen
+        chat = store.get_chat(chat_id)
+        if chat is None:
+            return _bad("chat not found", 404)
+        chat.pop("session_id", None)  # the window has no use for it
+        return {"chat": chat, "messages": store.messages(chat_id)}
+
+    @app.patch("/api/chats/{chat_id}")
+    async def rename_chat(chat_id: int, request: Request):  # F-HIST-3
+        body = await read_json(request)
+        title = body.get("title") if body else None
+        if not isinstance(title, str) or not 0 < len(title.strip()) <= 200:
+            return _bad("title must be 1 to 200 characters")
+        if not store.rename(chat_id, " ".join(title.split())):
+            return _bad("chat not found", 404)
+        return {"ok": True}
+
+    async def forget_sessions(session_ids: list[str]) -> dict[str, int]:
+        """D-2: delete SDK transcripts. Counts removed files, and files that could not be removed
+        (for example held open by another program), so the window can say so."""
+        def run() -> dict[str, int]:
+            counts = {"transcripts_removed": 0, "transcripts_failed": 0}
+            for sid in set(session_ids):
+                try:
+                    counts["transcripts_removed"] += delete_transcript(sid)
+                except OSError:
+                    counts["transcripts_failed"] += 1
+            return counts
+        return await asyncio.to_thread(run)
+
+    @app.delete("/api/chats/{chat_id}")
+    async def delete_chat(chat_id: int):  # F-HIST-3, D-2
+        if state.busy and chat_id in (state.chat_id, state.turn_chat_id):
+            return _bad("a reply is still streaming in this chat", 409)
+        if chat_id == state.closing_chat_id:  # its process could still write the transcript
+            return _bad("this chat is still closing, try again in a moment", 409)
+        if chat_id == state.chat_id:
+            async with exclusive():
+                await detach_session()  # the process must not write the transcript again after we delete it
+        session_ids = store.delete_chat(chat_id)
+        if session_ids is None:
+            return _bad("chat not found", 404)
+        return {"ok": True, **await forget_sessions(session_ids)}
+
+    @app.post("/api/chats/{chat_id}/export")
+    async def export_chat(chat_id: int):  # F-HIST-5
+        path = store.export_markdown(chat_id, bot_name=config.load()["bot_name"])
+        if path is None:
+            return _bad("chat not found", 404)
+        return {"ok": True, "path": str(path)}
+
+    @app.post("/api/history/delete-all")
+    async def delete_all(request: Request):  # D-3
+        body = await read_json(request)
+        if not body or body.get("confirm") != "DELETE":  # the window's confirmation step
+            return _bad("confirmation missing")
+        if state.busy:
+            return _bad("a reply is still streaming", 409)
+        async with exclusive():
+            await detach_session()
+            ids = store.delete_all() + all_transcript_ids()  # also old transcripts no chat refers to
+        return {"ok": True, **await forget_sessions(ids)}
 
     return app
 

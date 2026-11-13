@@ -32,8 +32,9 @@ def server(tmp_path):
     config.CONFIG_PATH = old
 
 
-def chat(port, text):
-    resp, data = request(port, "POST", "/api/chat", origin=own(port), body={"text": text}, timeout=120)
+def chat(port, text, chat_id=None):
+    resp, data = request(port, "POST", "/api/chat", origin=own(port),
+                         body={"text": text, "chat_id": chat_id}, timeout=120)
     assert resp.status == 200
     return [json.loads(line) for line in data.decode().splitlines() if line]
 
@@ -50,7 +51,8 @@ def test_stream_and_switch_personality(server):
     resp, _ = request(server, "POST", "/api/settings", origin=own(server),
                       body={"personality": "custom", "custom_prompt": "Always answer in UPPERCASE letters only."})
     assert resp.status == 200
-    events = chat(server, "What was the code word, and what colour is the sky on a clear day? One sentence.")
+    cid = next(e["id"] for e in events if e["kind"] == "chat")
+    events = chat(server, "What was the code word, and what colour is the sky on a clear day? One sentence.", cid)
     reply = "".join(e["text"] for e in events if e["kind"] == "text")
     assert "HERON-9" in reply and reply == reply.upper()
 
@@ -61,7 +63,7 @@ def _pid_alive(pid: int) -> bool:
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows console Ctrl+C behaviour")
-@pytest.mark.parametrize("mode", ["idle", "busy"])
+@pytest.mark.parametrize("mode", ["idle", "busy", "starting"])
 def test_server_ctrl_c_exits_cleanly(tmp_path, mode):  # Ctrl+C: quick, no traceback, no orphan claude.exe
     cfg = tmp_path / "config.json"
     cfg.write_text(json.dumps({"model": "haiku", "web_enabled": False, "port": free_port()}))
@@ -71,7 +73,8 @@ def test_server_ctrl_c_exits_cleanly(tmp_path, mode):  # Ctrl+C: quick, no trace
                    creationflags=subprocess.CREATE_NEW_CONSOLE, timeout=300)
     lines = log.read_text().splitlines()
     pids = [int(p) for p in lines[0].split()[1:]]
-    assert pids, lines  # a claude.exe child existed
+    if mode != "starting":
+        assert pids, lines  # a claude.exe child existed
     assert lines[1] == "exit 0", lines  # clean exit, no KeyboardInterrupt traceback
     assert float(lines[2].split()[1]) < 8, lines  # did not wait for a long reply to finish
     time.sleep(2)

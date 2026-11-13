@@ -4,9 +4,12 @@ import asyncio
 import http.client
 import json
 import socket
+import tempfile
 import threading
 import time
+from pathlib import Path
 
+from hub.chat.history import HistoryStore
 from hub.server import COOKIE, create_app, make_server
 
 TOKEN = "test-token-123"
@@ -19,6 +22,8 @@ def free_port() -> int:
 
 
 def start_server(port, **app_kwargs):
+    # Tests never touch the real data/chats.db: default to a fresh temporary one.
+    app_kwargs.setdefault("history", HistoryStore(Path(tempfile.mkdtemp()) / "chats.db"))
     app = create_app(TOKEN, port, check_login_on_start=False, **app_kwargs)
     srv = make_server(app, port)
     t = threading.Thread(target=lambda: asyncio.run(srv.serve()), daemon=True)

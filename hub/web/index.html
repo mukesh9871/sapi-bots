@@ -5,45 +5,66 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Hub</title>
   <link rel="stylesheet" href="/static/app.css">
-  <link rel="stylesheet" href="/static/vendor/hljs-light.css" media="(prefers-color-scheme: light)">
-  <link rel="stylesheet" href="/static/vendor/hljs-dark.css" media="(prefers-color-scheme: dark)">
+  <!-- app.js switches these when the theme is set to light or dark (N-USE-2) -->
+  <link rel="stylesheet" id="hljs-light" href="/static/vendor/hljs-light.css" media="(prefers-color-scheme: light)">
+  <link rel="stylesheet" id="hljs-dark" href="/static/vendor/hljs-dark.css" media="(prefers-color-scheme: dark)">
 </head>
 <body>
-  <div id="app">
-    <header class="topbar">
-      <div class="title" id="chat-title">New chat</div>
-      <div class="controls">
-        <label>Personality
-          <select id="personality"></select>
-        </label>
-        <button type="button" id="edit-custom" class="ghost" hidden>Edit prompt</button>
-        <label>Model
-          <select id="model">
-            <option value="">Plan default</option>
-            <option value="haiku">Haiku (fast)</option>
-            <option value="sonnet">Sonnet</option>
-            <option value="opus">Opus (strongest)</option>
-          </select>
-        </label>
-        <label class="toggle"><input type="checkbox" id="web"> Web search</label>
-        <button type="button" id="new-chat" class="ghost">New chat</button>
-      </div>
-    </header>
+  <div id="layout">
+    <!-- Left sidebar: New chat, search, past chats (F-HIST-2, F-HIST-3) -->
+    <aside id="sidebar">
+      <button type="button" id="new-chat">+ New chat</button>
+      <input type="search" id="search" placeholder="Search chats" aria-label="Search chats">
+      <ul id="chat-list" aria-label="Past chats"></ul>
+      <div id="chat-list-empty" class="muted small" hidden>No chats yet.</div>
+    </aside>
 
-    <main id="messages" aria-live="polite">
-      <div class="empty" id="empty">Ask me anything.</div>
-    </main>
+    <div id="app">
+      <header class="topbar">
+        <button type="button" id="toggle-sidebar" class="ghost icon" title="Chats" aria-label="Show chats">☰</button>
+        <div class="title" id="chat-title">New chat</div>
+        <div class="controls">
+          <label>Personality
+            <select id="personality"></select>
+          </label>
+          <button type="button" id="edit-custom" class="ghost" hidden>Edit prompt</button>
+          <label>Model
+            <select id="model">
+              <option value="">Plan default</option>
+              <option value="haiku">Haiku (fast)</option>
+              <option value="sonnet">Sonnet</option>
+              <option value="opus">Opus (strongest)</option>
+            </select>
+          </label>
+          <label class="toggle"><input type="checkbox" id="web"> Web search</label>
+          <button type="button" id="export" class="ghost" hidden title="Save this chat as a Markdown file">Export</button>
+          <button type="button" id="open-settings" class="ghost icon" title="Settings" aria-label="Settings">⚙</button>
+        </div>
+      </header>
 
-    <footer class="bottom">
-      <div id="activity" class="activity" hidden></div>
-      <form id="composer">
-        <textarea id="input" rows="1" placeholder="Message (Enter sends, Shift+Enter new line)" autofocus></textarea>
-        <button type="submit" id="send">Send</button>
-        <button type="button" id="stop" class="danger" hidden>Stop</button>
-      </form>
-      <div id="notices" class="notices" hidden></div>
-      <div id="status" class="status">Checking sign-in…</div>
-    </footer>
+      <main id="messages" aria-live="polite">
+        <div class="empty" id="empty">Ask me anything.</div>
+      </main>
+
+      <footer class="bottom">
+        <div id="activity" class="activity" hidden></div>
+        <form id="composer">
+          <textarea id="input" rows="1" placeholder="Message (Enter sends, Shift+Enter new line)" autofocus></textarea>
+          <button type="submit" id="send">Send</button>
+          <button type="button" id="stop" class="danger" hidden>Stop</button>
+        </form>
+        <div id="flash" class="flash" hidden></div>
+        <div id="notices" class="notices" hidden></div>
+        <div id="status" class="status">Checking sign-in…</div>
+      </footer>
+    </div>
+  </div>
+
+  <!-- Right-click menu for a chat in the sidebar -->
+  <div id="chat-menu" class="menu" role="menu" hidden>
+    <button type="button" data-act="rename" role="menuitem">Rename</button>
+    <button type="button" data-act="export" role="menuitem">Export</button>
+    <button type="button" data-act="delete" role="menuitem" class="danger-text">Delete</button>
   </div>
 
   <dialog id="custom-dialog">
@@ -54,6 +75,71 @@
       <menu>
         <button value="cancel" class="ghost">Cancel</button>
         <button value="save" id="custom-save">Save</button>
+      </menu>
+    </form>
+  </dialog>
+
+  <!-- Settings page (M3 check 3): saved to config.json -->
+  <dialog id="settings-dialog" class="wide">
+    <form id="settings-form" method="dialog">
+      <h2>Settings</h2>
+
+      <fieldset>
+        <legend>Bot</legend>
+        <div class="row">
+          <label>Name <input id="set-bot-name" maxlength="40" required></label>
+          <label>Avatar <input id="set-avatar" maxlength="8" class="short" required title="An emoji or up to 4 letters"></label>
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>Defaults</legend>
+        <div class="row">
+          <label>Model
+            <select id="set-model">
+              <option value="">Plan default</option>
+              <option value="haiku">Haiku (fast)</option>
+              <option value="sonnet">Sonnet</option>
+              <option value="opus">Opus (strongest)</option>
+            </select>
+          </label>
+          <label>Theme
+            <select id="set-theme">
+              <option value="system">Follow system</option>
+              <option value="light">Light</option>
+              <option value="dark">Dark</option>
+            </select>
+          </label>
+          <label class="toggle"><input type="checkbox" id="set-web"> Web search</label>
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>Personality prompts</legend>
+        <p class="hint">Changes apply from the next message. "Reset" puts back the built-in text.</p>
+        <div id="set-prompts"></div>
+        <label class="block">Custom
+          <textarea id="set-custom" rows="4" placeholder="Your own personality (optional)"></textarea>
+        </label>
+      </fieldset>
+
+      <fieldset>
+        <legend>History</legend>
+        <p class="hint">Chats are saved in data\chats.db inside the app folder.</p>
+        <div class="row">
+          <button type="button" id="delete-all" class="danger">Delete all history…</button>
+          <span id="delete-all-confirm" hidden>
+            This deletes every chat and its transcript. It cannot be undone.
+            <button type="button" id="delete-all-yes" class="danger">Yes, delete everything</button>
+            <button type="button" id="delete-all-no" class="ghost">Cancel</button>
+          </span>
+        </div>
+      </fieldset>
+
+      <div id="settings-error" class="error-text" hidden></div>
+      <menu>
+        <button type="button" id="settings-cancel" class="ghost">Cancel</button>
+        <button type="submit" id="settings-save">Save</button>
       </menu>
     </form>
   </dialog>
