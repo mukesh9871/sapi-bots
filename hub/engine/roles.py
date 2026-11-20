@@ -29,8 +29,9 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 ROLES_DIR = PROJECT_ROOT / "packs" / "local" / "roles"
 ROLE_WORK_ROOT = PROJECT_ROOT / "projects"
 
-# G-TOOL-1, G-TOOL-2: what a role may list. No acting tools until the approval gate (Milestone 6).
-# "files" tools are limited to the role's own folder (see hub/chat/claude_session.py, confine).
+# G-TOOL-1, G-TOOL-2: the built-in tools a role may list. Connector actions (acting, through
+# the approval gate) are added by catalog(). "own-folder" tools are limited to the role's folder
+# (see hub/chat/claude_session.py, outside_folder).
 TOOL_CATALOG: dict[str, dict[str, str]] = {
     "WebSearch": {"kind": "read-only", "label": "Search the web"},
     "WebFetch": {"kind": "read-only", "label": "Read a web page"},
@@ -44,8 +45,19 @@ FILE_TOOLS = ("Read", "Glob", "Grep", "Write", "Edit")
 MODELS = ("", "haiku", "sonnet", "opus")  # "" = the default model from Settings
 
 MAX_NAME = 40
+DEFAULT_TURNS = 30  # G-BUDGET-1: a task's budget in turns, per message
+MAX_TURNS = 200
 MAX_INSTRUCTIONS = 20_000
 ID_RE = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")  # a role id is also part of a folder name
+
+
+def catalog() -> dict[str, dict[str, str]]:
+    """Everything a role may list: built-in tools, then connector actions such as
+    "demo.post_note" (kind "acting": every call goes through the approval gate)."""
+    from hub import connectors  # here, so the role files can be read without loading connectors
+    acts = {a.id: {"kind": "acting" if a.acting else "read-only", "label": a.description}
+            for a in connectors.actions().values()}
+    return {**TOOL_CATALOG, **acts}
 
 
 class RoleError(ValueError):
@@ -60,6 +72,7 @@ class Role:
     tools: tuple[str, ...]
     instructions: str
     problem: str = ""  # set when a hand-edited file is not valid; such a role never runs
+    max_turns: int = DEFAULT_TURNS  # G-BUDGET-1
 
     @property
     def folder(self) -> Path:
@@ -67,10 +80,12 @@ class Role:
 
     def to_dict(self) -> dict:
         return {"id": self.id, "name": self.name, "model": self.model, "tools": list(self.tools),
-                "instructions": self.instructions, "problem": self.problem, "folder": str(self.folder)}
+                "instructions": self.instructions, "problem": self.problem, "folder": str(self.folder),
+                "max_turns": self.max_turns}
 
 
-def check(name: str, model: str, tools: list[str] | tuple[str, ...], instructions: str) -> str | None:
+def check(name: str, model: str, tools: list[str] | tuple[str, ...], instructions: str,
+          max_turns: int = DEFAULT_TURNS) -> str | None:
     """Returns what is wrong with a role, or None."""
     # No control characters: a lone carriage return would end the header line on reload (review M5).
     if not isinstance(name, str) or not 0 < len(name.strip()) <= MAX_NAME or any(ord(c) < 32 or ord(c) == 127 for c in name):
@@ -79,13 +94,15 @@ def check(name: str, model: str, tools: list[str] | tuple[str, ...], instruction
         return "unknown model"
     if not isinstance(tools, (list, tuple)) or not all(isinstance(t, str) for t in tools):
         return "bad tool list"
-    unknown = [t for t in tools if t not in TOOL_CATALOG]
+    unknown = [t for t in tools if t not in catalog()]
     if unknown:
         return f"tools not allowed for a role: {', '.join(unknown)}"  # G-TOOL-3
     if not isinstance(instructions, str) or not instructions.strip():
         return "the job description is empty"
     if len(instructions) > MAX_INSTRUCTIONS:
         return "the job description is too long"
+    if not isinstance(max_turns, int) or isinstance(max_turns, bool) or not 1 <= max_turns <= MAX_TURNS:
+        return f"max turns must be 1 to {MAX_TURNS}"
     return None
 
 
@@ -107,15 +124,18 @@ def parse(role_id: str, text: str) -> Role:
     if {"Write", "Edit"} & set(tools) and "Read" not in tools:
         tools = ("Read", *tools)  # same rule as save(): the CLI changes only files it has read
     instructions = body.strip()
+    raw_turns = header.get("max_turns", "") or str(DEFAULT_TURNS)
+    # isascii: "²".isdigit() is True but int("²") fails, and parse() must never raise (review M6)
+    max_turns = int(raw_turns) if raw_turns.isascii() and raw_turns.isdigit() and len(raw_turns) < 6 else -1
     closed = lines[0].strip() == "---" and "---" in (l.strip() for l in lines[1:])
     problem = "" if closed else "the file has no header (--- lines above and below it)"
-    problem = problem or check(name, model, tools, instructions) or ""
-    return Role(role_id, name, model, tools, instructions, problem)
+    problem = problem or check(name, model, tools, instructions, max_turns) or ""
+    return Role(role_id, name, model, tools, instructions, problem, max_turns if max_turns > 0 else DEFAULT_TURNS)
 
 
 def dump(role: Role) -> str:
     return (f"---\nname: {role.name.strip()}\nmodel: {role.model}\n"
-            f"tools: {', '.join(role.tools)}\n---\n{role.instructions.strip()}\n")
+            f"tools: {', '.join(role.tools)}\nmax_turns: {role.max_turns}\n---\n{role.instructions.strip()}\n")
 
 
 def make_id(name: str, taken: set[str]) -> str:
@@ -166,9 +186,10 @@ class RoleStore:
         tmp.write_text(dump(role), encoding="utf-8")
         os.replace(tmp, path)  # atomic, so a crash never leaves half a role file
 
-    def save(self, role_id: str | None, name: str, model: str, tools: list[str], instructions: str) -> Role:
+    def save(self, role_id: str | None, name: str, model: str, tools: list[str], instructions: str,
+             max_turns: int = DEFAULT_TURNS) -> Role:
         """Creates a role (role_id None) or replaces an existing one. Raises RoleError."""
-        problem = check(name, model, tools, instructions)
+        problem = check(name, model, tools, instructions, max_turns)
         if problem:
             raise RoleError(problem)
         if role_id is None:
@@ -179,7 +200,8 @@ class RoleStore:
         if {"Write", "Edit"} & set(tools):
             tools = [*tools, "Read"]
         # Keep the catalog order, drop repeats, so the file reads the same every time.
-        role = Role(role_id, name.strip(), model, tuple(t for t in TOOL_CATALOG if t in tools), instructions.strip())
+        role = Role(role_id, name.strip(), model, tuple(t for t in catalog() if t in tools), instructions.strip(),
+                    max_turns=max_turns)
         self._write(role)
         return role
 
@@ -189,7 +211,8 @@ class RoleStore:
             raise RoleError("this role no longer exists")
         if role.problem:
             raise RoleError(f"fix this role first: {role.problem}")
-        return self.save(None, f"{role.name} (copy)"[:MAX_NAME], role.model, list(role.tools), role.instructions)
+        return self.save(None, f"{role.name} (copy)"[:MAX_NAME], role.model, list(role.tools), role.instructions,
+                         role.max_turns)
 
     def delete(self, role_id: str) -> bool:
         """Removes the role file only. Its folder (the role's work) and its chats are kept."""

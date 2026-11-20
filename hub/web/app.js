@@ -1,4 +1,4 @@
-// Chat window (Milestones 2 to 5). Plain JavaScript, no build step.
+// Chat window (Milestones 2 to 6). Plain JavaScript, no build step.
 // The launch token travels as an HttpOnly cookie, so fetch() sends it automatically.
 "use strict";
 
@@ -14,6 +14,9 @@ const els = {
   settingsBtn: $("open-settings"), settingsDialog: $("settings-dialog"), settingsForm: $("settings-form"),
   talkTo: $("talk-to"), personalityBox: $("personality-box"), modelBox: $("model-box"), webBox: $("web-box"),
   rolesBtn: $("open-roles"), rolesDialog: $("roles-dialog"), roleForm: $("role-form"), roleList: $("role-list"),
+  approvalsBtn: $("open-approvals"), approvalsBadge: $("approvals-badge"), approvalsDialog: $("approvals-dialog"),
+  activityBtn: $("open-activity"), activityDialog: $("activity-dialog"), usageBar: $("usage-bar"),
+  pauseToggle: $("pause-toggle"), taskBudget: $("task-budget"),
 };
 
 const LABELS = { fun: "Fun", straight: "Straight", explainer: "Explainer", custom: "Custom" };
@@ -31,6 +34,7 @@ let toolCatalog = {};
 let currentRole = null; // role of the chat on screen
 let newChatRole = null; // "Talk to" choice for the next new chat
 const roleById = (id) => roles.find((r) => r.id === id);
+const BUDGET_NOTE = "(stopped: this task reached its budget of turns. Raise it on the Roles page, or ask for less at once.)";
 
 // N-REL-1 / R-AUTH-4 / R-AUTH-6: plain words for errors.
 const ERRORS = {
@@ -44,6 +48,7 @@ const ERRORS = {
   network: "Lost connection to the app. Is it still running?",
   role_missing: "This role was deleted. You can still read this chat, but not continue it. Start a new chat to use another role.",
   role_broken: "This role's file has a problem, so it cannot run. Open Roles to fix it.",
+  automation_paused: "Automation is paused, so roles cannot take tasks. Press Resume at the bottom to continue. Plain chat still works.",
 };
 
 // Small fetch helper: JSON in, JSON out, throws with the server's reason.
@@ -52,7 +57,7 @@ async function api(method, url, body) {
   if (body !== undefined) { opts.headers = { "Content-Type": "application/json" }; opts.body = JSON.stringify(body); }
   const res = await fetch(url, opts);
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || res.statusText);
+  if (!res.ok) { const e = new Error(data.error || res.statusText); e.repeat = !!data.repeat; throw e; }
   return data;
 }
 
@@ -165,7 +170,7 @@ function setStreaming(on) {
   streaming = on;
   els.send.hidden = on; els.stop.hidden = !on;
   // Sidebar and New chat stay usable: switching chats mid-reply is allowed.
-  if (!on) { els.activity.hidden = true; els.input.focus(); }
+  if (!on) { els.activity.hidden = true; els.input.focus(); els.taskBudget.hidden = true; refreshGate(); }
   showRoleControls();
 }
 
@@ -290,7 +295,9 @@ async function send(text) {
           turn.note = ev.text; // kept, so a switch back during the reply shows it again
           if (turnVisible()) addChatNote(ev.text, bot.div); // F-HIST-4: restored from saved history
         } else if (ev.kind === "tool") {
-          if (turnVisible()) setActivity(ev.text === "WebSearch" ? "searching the web…" : ev.text === "WebFetch" ? "reading a page…" : `using ${ev.text}…`);
+          if (turnVisible()) setActivity(toolLabel(ev.text));
+        } else if (ev.kind === "turn") {
+          showBudget(ev.data); // G-BUDGET-1 / UI 13: turns used by this task
         } else if (ev.kind === "retry") {
           // N-REL-1: Claude is not answering and the app is trying again; Stop still works.
           const d = ev.data || {};
@@ -303,6 +310,9 @@ async function send(text) {
           turn.error = showError(bot, ev, text); errorShown = true;
         } else if (ev.kind === "done" && String(ev.terminal_reason || "").startsWith("aborted")) {
           addNote(bot, "(stopped)");
+        } else if (ev.kind === "done" && ev.subtype === "error_max_turns") {
+          // G-BUDGET-1: the task used its whole turn budget, so the run stopped. Say so plainly.
+          addNote(bot, BUDGET_NOTE);
         }
       }
     }
@@ -486,6 +496,7 @@ async function openChat(id, reload = false) {
       if (m.role === "user") { addUserMessage(m.text); continue; }
       const bot = addBotMessage(chat.role); bot.text = m.text; finishBot(bot); showSources(bot, m.sources);
       if (m.status === "stopped") addNote(bot, "(stopped)");
+      if (m.status === "budget") addNote(bot, BUDGET_NOTE); // G-BUDGET-1, also after reopening
     }
     // Back to the chat that is still replying: re-attach the live reply under its question.
     // If the last saved message is already the reply, it finished meanwhile: do not show it twice.
@@ -679,6 +690,7 @@ function openSettings() {
   $("set-custom").value = settings.custom_prompt;
   $("settings-error").hidden = true;
   $("delete-all-confirm").hidden = true; $("delete-all").hidden = false;
+  loadRules();
   els.settingsDialog.showModal();
 }
 
@@ -740,7 +752,7 @@ function buildToolBoxes() {
     const cb = document.createElement("input"); cb.type = "checkbox"; cb.value = name;
     const text = document.createElement("span"); text.textContent = `${info.label} (${name})`;
     const kind = document.createElement("span"); kind.className = "kind";
-    kind.textContent = info.kind === "read-only" ? "read-only" : "changes its own folder";
+    kind.textContent = info.kind === "read-only" ? "read-only" : info.kind === "acting" ? "acting: goes through Approvals" : "changes its own folder";
     label.append(cb, text, kind);
     box.append(label);
     roleBoxes[name] = cb;
@@ -768,6 +780,7 @@ function editRole(id) {
   const tools = r ? r.tools : ["WebSearch", "WebFetch"]; // a new role starts with web tools only
   for (const [name, cb] of Object.entries(roleBoxes)) cb.checked = tools.includes(name);
   $("role-instructions").value = r ? r.instructions : "";
+  $("role-turns").value = r ? r.max_turns : 30;
   $("role-folder").textContent = r ? `Its folder: ${r.folder}` : "A new role gets its own folder under projects.";
   const problem = $("role-problem");
   problem.textContent = r && r.problem ? `This role cannot run until it is fixed: ${r.problem}. Saving fixes it.` : "";
@@ -793,6 +806,7 @@ async function saveRole() { // returns the saved role, or null
     name: $("role-name").value, model: $("role-model").value,
     tools: Object.entries(roleBoxes).filter(([, cb]) => cb.checked).map(([name]) => name),
     instructions: $("role-instructions").value,
+    max_turns: Number($("role-turns").value),
   };
   try {
     const { role } = editingRole === null ? await api("POST", "/api/roles", body)
@@ -831,6 +845,157 @@ $("role-task").onclick = async () => {
   els.newChat.click();
 };
 els.rolesBtn.onclick = () => openRoles();
+
+// ---------- Milestone 6: approvals, activity log, rules, pause, budget ----------
+function toolLabel(name) {
+  if (name === "WebSearch") return "searching the web…";
+  if (name === "WebFetch") return "reading a page…";
+  // An acting tool: the approval gate decides whether it runs now, waits for you, or is refused.
+  if (name.startsWith("mcp__hub__")) return `acting: ${name.slice(10).replace("_", " ")} (checked against your rules)…`;
+  return `using ${name}…`;
+}
+
+function showBudget(d) { // UI 13: the running task's budget
+  if (!d || !d.max) return;
+  els.taskBudget.textContent = `Task: ${d.turn} of ${d.max} turns`;
+  els.taskBudget.hidden = false;
+}
+
+let paused = false;
+async function refreshGate() {
+  try {
+    const g = await api("GET", "/api/gate/summary");
+    els.approvalsBadge.textContent = g.pending; els.approvalsBadge.hidden = !g.pending;
+    showPause(g.paused);
+  } catch { /* the status line reports a dead server */ }
+}
+function showPause(p) {
+  paused = p;
+  $("automation-state").textContent = p ? "Automation: paused" : "Automation: running";
+  els.pauseToggle.textContent = p ? "Resume" : "Pause";
+  els.pauseToggle.title = p ? "Let roles take tasks and actions run again"
+    : "Stop role tasks and hold every action, for example when your usage limit is nearly used. Plain chat keeps working.";
+  els.usageBar.classList.toggle("paused", p);
+}
+els.pauseToggle.onclick = async () => { // G-BUDGET-2
+  try { const { settings: s } = await api("POST", "/api/settings", { automation_paused: !paused }); settings = s; showPause(s.automation_paused); }
+  catch (err) { flash(`Could not change the pause switch: ${err.message}.`, true); }
+};
+
+// G-APPR-2: each held item shows exactly what will be done, with editable fields.
+async function openApprovals() {
+  let items;
+  try { ({ items } = await api("GET", "/api/approvals")); } catch (err) { flash(`Could not load approvals: ${err.message}.`, true); return; }
+  const list = $("approvals-list");
+  list.replaceChildren(...items.map(approvalCard));
+  $("approvals-empty").hidden = items.length > 0;
+  if (!els.approvalsDialog.open) els.approvalsDialog.showModal();
+}
+
+function approvalCard(item) {
+  const card = document.createElement("div"); card.className = "approval";
+  const meta = document.createElement("div"); meta.className = "meta";
+  meta.textContent = `#${item.id} · ${item.agent} wants to ${item.action_id.replace(".", ": ").replace("_", " ")} · ${new Date(item.created_at * 1000).toLocaleString()}`;
+  card.append(meta);
+  if (item.reason) { const r = document.createElement("div"); r.className = "reason"; r.textContent = `Held because: ${item.reason}`; card.append(r); }
+  const boxes = {};
+  for (const [key, spec] of Object.entries(item.fields)) {
+    const label = document.createElement("label"); label.textContent = spec.description || key;
+    const ta = document.createElement("textarea"); ta.rows = key === "text" ? 5 : 1; ta.value = item.payload[key] || "";
+    if (spec.max) ta.maxLength = spec.max;
+    label.append(ta); card.append(label); boxes[key] = ta;
+  }
+  const err = document.createElement("div"); err.className = "error-text"; err.hidden = true;
+  const actions = document.createElement("div"); actions.className = "actions";
+  const reject = document.createElement("button"); reject.type = "button"; reject.className = "danger"; reject.textContent = "Reject";
+  const approve = document.createElement("button"); approve.type = "button"; approve.textContent = "Approve";
+  const busy = (on) => { approve.disabled = reject.disabled = on; };
+  approve.onclick = async () => {
+    busy(true);
+    const payload = Object.fromEntries(Object.entries(boxes).map(([k, ta]) => [k, ta.value]));
+    try {
+      let r;
+      try { r = await api("POST", `/api/approvals/${item.id}/approve`, { payload }); }
+      catch (e) {
+        // N-REL-3: this exact content already ran recently. Post it again only if I say so.
+        if (!e.repeat || !confirm(`Exactly this content was already posted in the last 24 hours. Post it again?`)) throw e;
+        r = await api("POST", `/api/approvals/${item.id}/approve`, { payload, confirm_repeat: true });
+      }
+      flash(r.ok ? `Done${r.edited ? " (with your edits)" : ""}: ${r.result}` : `The action failed: ${r.result}`, !r.ok);
+      decided(card);
+    } catch (e) { err.textContent = `Could not approve: ${e.message}.`; err.hidden = false; busy(false); }
+  };
+  reject.onclick = async () => {
+    busy(true);
+    try { await api("POST", `/api/approvals/${item.id}/reject`); flash("Rejected. Nothing was done."); decided(card); }
+    catch (e) { err.textContent = `Could not reject: ${e.message}.`; err.hidden = false; busy(false); }
+  };
+  actions.append(reject, approve);
+  card.append(err, actions);
+  return card;
+}
+// Remove only the decided card, so unsaved edits in the others stay (review M6).
+function decided(card) {
+  card.remove();
+  $("approvals-empty").hidden = !!$("approvals-list").querySelector(".approval");
+  refreshGate();
+}
+els.approvalsBtn.onclick = openApprovals;
+$("approvals-close").onclick = () => els.approvalsDialog.close();
+
+// G-LOG-1 / UI 12: the activity log, newest first.
+const DECISIONS = { auto: "Auto", approved: "Approved by you", held: "Held for approval", blocked: "Blocked (Never)", rejected: "Rejected by you" };
+const OUTCOMES = { started: "started", done: "done", failed: "failed", unknown: "unknown: check it", "": "" };
+async function loadActivity() {
+  const q = new URLSearchParams({ q: $("activity-q").value, pack: $("activity-pack").value.trim(),
+    platform: $("activity-platform").value.trim(), day: $("activity-day").value });
+  let entries;
+  try { ({ entries } = await api("GET", `/api/activity?${q}`)); } catch (err) { flash(`Could not load the log: ${err.message}.`, true); return; }
+  $("activity-table").querySelector("tbody").replaceChildren(...entries.map((e) => {
+    const tr = document.createElement("tr");
+    const cells = [new Date(e.at * 1000).toLocaleString(), e.agent, `${e.pack} · ${e.action_id}`,
+      DECISIONS[e.decision] || e.decision, [OUTCOMES[e.outcome] ?? e.outcome, e.detail].filter(Boolean).join(": ")];
+    cells.forEach((text, i) => {
+      const td = document.createElement("td"); td.textContent = text;
+      if (i === 3) td.className = `decision-${e.decision}`;
+      if (i === 4) td.className = `wrap outcome-${e.outcome}`;
+      tr.append(td);
+    });
+    tr.title = JSON.stringify(e.payload, null, 2); // exactly what was sent
+    return tr;
+  }));
+  $("activity-empty").hidden = entries.length > 0;
+}
+let activityTimer = 0;
+for (const id of ["activity-q", "activity-pack", "activity-platform", "activity-day"]) {
+  $(id).addEventListener("input", () => { clearTimeout(activityTimer); activityTimer = setTimeout(loadActivity, 250); });
+}
+els.activityBtn.onclick = async () => { await loadActivity(); els.activityDialog.showModal(); };
+$("activity-close").onclick = () => els.activityDialog.close();
+
+// G-APPR-1 / G-APPR-3: rules are changed only here, by you. Each change saves at once.
+async function loadRules() {
+  let rules;
+  try { ({ rules } = await api("GET", "/api/rules")); } catch { return; }
+  $("rules-table").querySelector("tbody").replaceChildren(...rules.map((r) => {
+    const tr = document.createElement("tr");
+    for (const t of [r.pack, r.platform, r.action.replace("_", " ")]) { const td = document.createElement("td"); td.textContent = t; tr.append(td); }
+    const mode = document.createElement("select");
+    for (const [v, label] of [["ask", "Ask"], ["auto", "Auto"], ["never", "Never"]]) {
+      const o = document.createElement("option"); o.value = v; o.textContent = label; mode.append(o);
+    }
+    mode.value = r.mode;
+    const cap = document.createElement("input"); cap.type = "number"; cap.min = 1; cap.max = 1000; cap.value = r.daily_cap; cap.className = "short";
+    const save = async () => {
+      try { await api("PUT", "/api/rules", { pack: r.pack, platform: r.platform, action: r.action, mode: mode.value, daily_cap: Number(cap.value) }); flash("Rule saved."); }
+      catch (err) { flash(`Could not save the rule: ${err.message}.`, true); loadRules(); }
+    };
+    mode.onchange = save; cap.onchange = save;
+    for (const el of [mode, cap]) { const td = document.createElement("td"); td.append(el); tr.append(td); }
+    return tr;
+  }));
+  $("rules-empty").hidden = rules.length > 0;
+}
 
 // ---------- new chat ----------
 els.newChat.onclick = async () => {
@@ -886,6 +1051,7 @@ async function refreshStatus() {
     buildPromptEditors();
     applySettings(data.settings);
     await loadRoles().catch(() => {}); // before the chat list, so role chats show their role
+    refreshGate(); setInterval(refreshGate, 5000); // approvals badge and pause state
 
     showStatus(data.status);
     if (data.status.pending) setTimeout(refreshStatus, 1500); // sign-in check still running

@@ -147,3 +147,20 @@ dialog input.short { width: 5em; }
 dialog menu .spacer { flex: 1; }
 .chat-role { color: var(--muted); }
 @media (max-width: 760px) { .roles-layout { flex-direction: column; } .roles-side { width: 100%; } }
+
+/* Milestone 6: approvals, activity log, usage bar */
+.badge { background: var(--danger); color: #fff; border-radius: 9px; padding: 0 6px; font-size: 11.5px; margin-left: 4px; }
+.usage-bar { display: flex; gap: 10px; align-items: center; font-size: 12.5px; color: var(--muted); margin-top: 4px; }
+.usage-bar.paused #automation-state { color: var(--danger); font-weight: 600; }
+.small-btn { padding: 1px 8px; font-size: 12px; }
+.approval { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; margin-top: 10px; }
+.approval .meta { font-size: 12.5px; color: var(--muted); }
+.approval .reason { color: var(--danger); }
+.approval label { display: block; margin-top: 6px; font-size: 13px; }
+.approval .actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 8px; }
+table.grid { width: 100%; border-collapse: collapse; font-size: 13px; }
+table.grid th, table.grid td { text-align: left; padding: 4px 6px; border-bottom: 1px solid var(--border); vertical-align: top; }
+table.grid td.wrap { overflow-wrap: anywhere; }
+.table-wrap { max-height: 55vh; overflow: auto; margin-top: 8px; }
+.filters input { min-width: 0; }
+.outcome-failed, .outcome-unknown, .decision-blocked { color: var(--danger); }

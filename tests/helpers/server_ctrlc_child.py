@@ -26,6 +26,9 @@ config.CONFIG_PATH = Path(sys.argv[2])
 from hub.chat import history  # noqa: E402
 
 history.DB_PATH = Path(sys.argv[2]).with_name("chats.db")  # never the real data/chats.db
+from hub.gate import store as gate_store  # noqa: E402
+
+gate_store.DB_PATH = Path(sys.argv[2]).with_name("hub.db")  # never the real data/hub.db
 import hub.server as hub_server  # noqa: E402
 
 k32 = ctypes.windll.kernel32

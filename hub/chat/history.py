@@ -46,7 +46,7 @@ CREATE TABLE IF NOT EXISTS messages (
     chat_id INTEGER NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
     role TEXT NOT NULL,          -- 'user' or 'bot'
     text TEXT NOT NULL,
-    status TEXT NOT NULL DEFAULT '',  -- '' or 'stopped'
+    status TEXT NOT NULL DEFAULT '',  -- '', 'stopped', or 'budget' (the task hit its turn budget)
     created_at REAL NOT NULL,
     sources TEXT NOT NULL DEFAULT '[]'  -- F-WEB-2: JSON list of {url, title} the reply used
 );
@@ -237,6 +237,8 @@ class HistoryStore:
             lines += [f"## {who} ({stamp})", "", m["text"], ""]
             if m["status"] == "stopped":
                 lines += ["*(stopped)*", ""]
+            elif m["status"] == "budget":
+                lines += ["*(stopped: the task reached its budget of turns)*", ""]
             if m["sources"]:  # F-WEB-2
                 lines += ["Sources:", *[f"- [{_md_label(x['title'] or x['url'])}](<{x['url']}>)" for x in m["sources"]], ""]
         folder = folder or EXPORT_DIR

@@ -45,7 +45,7 @@ def store(work):
 def test_role_is_a_readable_file(store):
     role = store.save(None, **RESEARCHER)
     text = (store.folder / f"{role.id}.md").read_text(encoding="utf-8")
-    assert text.startswith("---\nname: Researcher\nmodel: haiku\ntools: WebSearch, WebFetch\n---\n")
+    assert text.startswith("---\nname: Researcher\nmodel: haiku\ntools: WebSearch, WebFetch\nmax_turns: 30\n---\n")
     assert "Find facts on the web" in text
     assert store.get(role.id) == role
 

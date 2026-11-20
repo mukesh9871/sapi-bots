@@ -15,6 +15,9 @@
     <aside id="sidebar">
       <button type="button" id="new-chat">+ New chat</button>
       <button type="button" id="open-roles" class="ghost" title="Create and edit roles (agents)">Roles</button>
+      <!-- Milestone 6: held actions (G-APPR-2) and everything done on my behalf (G-LOG-1) -->
+      <button type="button" id="open-approvals" class="ghost" title="Actions waiting for your approval">Approvals <span id="approvals-badge" class="badge" hidden>0</span></button>
+      <button type="button" id="open-activity" class="ghost" title="Everything done on your behalf">Activity log</button>
       <input type="search" id="search" placeholder="Search chats" aria-label="Search chats">
       <ul id="chat-list" aria-label="Past chats"></ul>
       <div id="chat-list-empty" class="muted small" hidden>No chats yet.</div>
@@ -61,6 +64,12 @@
         <div id="flash" class="flash" hidden></div>
         <div id="notices" class="notices" hidden></div>
         <div id="status" class="status">Checking sign-in…</div>
+        <!-- UI 13 usage bar: automation running or paused (G-BUDGET-2), the running task's budget (G-BUDGET-1) -->
+        <div id="usage-bar" class="usage-bar">
+          <span id="automation-state">Automation: running</span>
+          <button type="button" id="pause-toggle" class="ghost small-btn">Pause</button>
+          <span id="task-budget" hidden></span>
+        </div>
       </footer>
     </div>
   </div>
@@ -129,6 +138,15 @@
       </fieldset>
 
       <fieldset>
+        <legend>Approval rules</legend>
+        <p class="hint">What happens when a role uses an acting tool. Auto runs it and logs it (up to the daily cap,
+          then it waits for you), Ask holds it in Approvals, Never refuses it. New rules start as Ask.
+          Changes save at once.</p>
+        <table id="rules-table" class="grid"><thead><tr><th>Pack</th><th>Platform</th><th>Action</th><th>Rule</th><th>Daily cap</th></tr></thead><tbody></tbody></table>
+        <div id="rules-empty" class="muted small" hidden>No acting tools are installed.</div>
+      </fieldset>
+
+      <fieldset>
         <legend>History</legend>
         <p class="hint">Chats are saved in data\chats.db inside the app folder.</p>
         <div class="row">
@@ -174,6 +192,9 @@
           <p class="hint">Only the ticked tools are available to this role. File tools work only inside its own folder. Creating or changing files also ticks reading them.</p>
           <div id="role-tools"></div>
         </fieldset>
+        <label class="block">Budget: most turns per task
+          <input id="role-turns" type="number" min="1" max="200" step="1" required class="short">
+        </label>
         <label class="block">Job description (its instructions)
           <textarea id="role-instructions" rows="9" maxlength="20000" required
             placeholder="What this role does, how it works, and what it should hand back."></textarea>
@@ -190,6 +211,29 @@
         </menu>
       </form>
     </div>
+  </dialog>
+
+  <!-- Approvals inbox (G-APPR-2): exactly what will be done, with Approve, Edit, Reject -->
+  <dialog id="approvals-dialog" class="wide">
+    <h2>Approvals</h2>
+    <p class="hint">Nothing here has happened yet. Change the text in a box to edit it before you approve.</p>
+    <div id="approvals-list"></div>
+    <div id="approvals-empty" class="muted" hidden>Nothing is waiting for you.</div>
+    <menu><button type="button" id="approvals-close" class="ghost">Close</button></menu>
+  </dialog>
+
+  <!-- Activity log (G-LOG-1, UI 12): append-only, searchable, filter by pack, platform and date -->
+  <dialog id="activity-dialog" class="wide">
+    <h2>Activity log</h2>
+    <div class="row filters">
+      <input type="search" id="activity-q" placeholder="Search" aria-label="Search the log">
+      <input id="activity-pack" placeholder="Pack" class="short" aria-label="Pack">
+      <input id="activity-platform" placeholder="Platform" class="short" aria-label="Platform">
+      <input type="date" id="activity-day" aria-label="Date">
+    </div>
+    <div class="table-wrap"><table id="activity-table" class="grid"><thead><tr><th>Time</th><th>Agent</th><th>Action</th><th>Decision</th><th>Result</th></tr></thead><tbody></tbody></table></div>
+    <div id="activity-empty" class="muted" hidden>Nothing has been done on your behalf yet.</div>
+    <menu><button type="button" id="activity-close" class="ghost">Close</button></menu>
   </dialog>
 
   <script src="/static/vendor/marked.min.js"></script>

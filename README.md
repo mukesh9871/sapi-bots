@@ -15,8 +15,9 @@ boxes and ✅ marks there show what is built and tested.
 | | 2. Desktop chat window | Done |
 | | 3. History and settings | Done |
 | | 4. Web search and polish | Done |
-| 2. Generic platform | 5. Roles and single agents | Ready to test |
-| | 6 to 8. Approvals, log, budgets, teams, scheduler, packs | Not started |
+| 2. Generic platform | 5. Roles and single agents | Done |
+| | 6. Approvals, log and budgets | Ready to test |
+| | 7 to 8. Teams, scheduler, pack format | Not started |
 | 3. Instruction packs | 9 to 13. Routines, social media, jobs, software team, video | Not started |
 
 ## What it does today
@@ -43,6 +44,18 @@ boxes and ✅ marks there show what is built and tested.
   and delete roles: a name, a job description, a model and the tools it may use. Pick a
   role in **Talk to** before the first message of a new chat (or press **Give it a
   task** on the Roles page), and that chat runs as the role.
+- **Approvals and acting tools:** a role can list acting tools (today only the demo
+  "post a note" tool, which writes to `data/outbox/notes.md`). Every call goes through
+  your rule for it: **Auto** runs it and logs it (up to a daily cap, then it waits for
+  you), **Ask** holds it in **Approvals**, **Never** refuses it. New rules start as Ask.
+  Set rules in ⚙ Settings, Approval rules.
+- **Approvals inbox:** the sidebar badge shows how many actions wait. Each one shows
+  exactly what will be done. You can change the text, then Approve, or Reject.
+- **Activity log:** everything done (or refused) on your behalf, searchable and
+  filterable by pack, platform and date. Entries can never be changed or deleted.
+- **Budgets and pause:** each role has a turn budget per task (default 30); a task that
+  uses it all stops and says so. The **Pause** button at the bottom stops role tasks and
+  holds every action, so plain chat stays available when your limit is nearly used.
 - **Terminal chat** for quick use without the window.
 
 ## Requirements
@@ -128,6 +141,8 @@ Everything stays on your PC. None of these are committed to git.
 | Exports | `exports/` |
 | Roles | `packs/local/roles/<id>.md` (readable, safe to edit by hand) |
 | Each role's working folder | `projects/role-<id>/` |
+| Approval rules, inbox, activity log | `data/hub.db` (SQLite; the log is append-only) |
+| Demo connector output | `data/outbox/notes.md` |
 
 **Settings in `config.json`:**
 
@@ -142,8 +157,11 @@ Everything stays on your PC. None of these are committed to git.
 | `theme` | `system`, `light`, `dark` | `system` |
 | `prompts` | edited built-in prompts, e.g. `{"fun": "..."}` | `{}` |
 | `port` | local port for the server | `8765` |
+| `automation_paused` | `true` or `false` (the Pause button) | `false` |
 
 A broken or hand-mangled value falls back to its default instead of crashing the app.
+The one exception is the pause switch: if the file cannot be read, or
+`automation_paused` is not `true` or `false`, the app starts **paused** and says so.
 Never put passwords or keys in this file.
 
 **How "remembering" works:** each chat is linked to a Claude session. When you reopen
@@ -159,13 +177,16 @@ default) and the tools. The job description goes below it:
 name: Researcher
 model: sonnet
 tools: WebSearch, WebFetch, Read, Write
+max_turns: 30
 ---
 You research a topic on the web and write report.md in your folder.
 ```
 
 Tools a role may list: `WebSearch`, `WebFetch` (read-only), `Read`, `Glob`, `Grep`
 (read-only, its own folder) and `Write`, `Edit` (change files in its own folder; they
-bring `Read` with them). A file that lists anything else (for example `Bash`) is marked
+bring `Read` with them), plus connector actions such as `demo.post_note` (acting: every
+call goes through Approvals). `max_turns` is the task budget (1 to 200, default 30).
+A file that lists anything else (for example `Bash`) is marked
 "needs fixing" and never runs. Deleting a role keeps its chats (readable, not
 continuable) and its folder.
 
@@ -192,8 +213,13 @@ folder under `.claude\projects`. It never touches your other Claude Code project
   shortcut-type files (`.url`, `.lnk`, `desktop.ini`) and files pytest would run
   (`conftest.py`, `test_*.py`). `pytest.ini` also keeps pytest out of `projects/`.
 - **Web text is information, not instructions.**
-- Coming in Phase 2: every outside action (post, submit, send, delete) goes through an
-  approval rule (Auto, Ask or Never) and is written to an append-only activity log.
+- **Every outside action goes through the approval gate.** Its rule decides: Auto (up to
+  the daily cap), Ask or Never. Pause holds everything. Only you change rules, and only
+  in Settings. Every call, refused ones too, is written to the append-only activity log.
+- **Nothing runs twice by accident.** An action is logged "started" before it runs; if
+  the app stops mid-run it is marked "unknown" and never re-run. An identical request
+  within 24 hours is never run or queued again automatically. Approving content that
+  already ran asks you first.
 
 ## Project layout
 
@@ -209,6 +235,13 @@ hub/
     personalities.py   built-in prompts
   engine/
     roles.py           role files: read, check, save, copy, delete (Milestone 5)
+  gate/
+    gate.py            approval gate: rules, caps, pause, repeats, approve and reject (Milestone 6)
+    store.py           data/hub.db: rules, approvals inbox, append-only activity log
+  connectors/
+    base.py            what a connector action looks like
+    demo.py            demo "post a note" acting tool
+    __init__.py        finds every connector in this folder (no engine change to add one)
   web/               index.html, app.css, app.js, vendor/ (marked, DOMPurify, highlight.js)
 scripts/usage_test.py  plan-usage measurement
 scripts/make_shortcut.ps1  creates the desktop shortcut
@@ -238,7 +271,7 @@ In PowerShell, use `$env:HUB_LIVE='1'` instead of `set HUB_LIVE=1`.
 - Offline tests use a temporary database and a fake Claude session. They never touch
   your real `data/chats.db`.
 - Live tests use your subscription (a few short messages, mostly on Haiku).
-- Current result: 248 passed (226 offline, 22 live).
+- Current result: 310 passed (286 offline, 24 live).
 
 ## Working rules for development
 

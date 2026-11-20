@@ -14,6 +14,7 @@ Security (N-SEC-3, N-SEC-5, G-TOOL-3). Plain chat may use WebSearch + WebFetch, 
 
 from __future__ import annotations
 
+import asyncio
 import ctypes
 import dataclasses
 import os
@@ -44,9 +45,12 @@ from claude_agent_sdk import (
     ToolPermissionContext,
     ToolUseBlock,
     UserMessage,
+    create_sdk_mcp_server,
+    tool,
 )
 
 from hub.chat.personalities import system_prompt
+from hub import connectors
 from hub.engine import roles
 
 # The web tools are pre-approved on purpose, so the SDK's "callback shadowed" warning is expected.
@@ -240,6 +244,16 @@ def outside_folder(tool: str, tool_input: dict[str, Any], folder: Path) -> str |
     return None
 
 
+def _gated_tool(action: Any, gate: Any, agent: str) -> Any:
+    """An in-process tool for one connector action. It never acts by itself: the approval
+    gate decides (Auto, Ask, Never, cap, pause), runs and logs it (G-APPR-1, G-LOG-1)."""
+    @tool(f"{action.connector}_{action.name}", action.description, action.schema())
+    async def handler(args: dict[str, Any]) -> dict[str, Any]:
+        result = await asyncio.to_thread(gate.call, action.id, args, agent)  # SQLite + connector: off the loop
+        return {"content": [{"type": "text", "text": result.text}], "is_error": result.is_error}
+    return handler
+
+
 def build_options(
     *,
     personality: str = "straight",
@@ -249,24 +263,40 @@ def build_options(
     resume: str | None = None,
     cwd: Path | None = None,
     role: roles.Role | None = None,
+    gate: Any = None,
 ) -> ClaudeAgentOptions:
     """Plain chat (role None): web tools only, in the empty chat folder.
     A role (Milestone 5, G-TOOL-3): exactly the tools it lists, in its own folder, with its own
-    prompt and model. Personality and the web toggle do not apply to a role."""
+    prompt, model and turn budget. Personality and the web toggle do not apply to a role.
+    Connector actions a role lists (Milestone 6) become tools on an in-process "hub" server
+    whose every call goes through the approval gate (`gate`, a hub.gate.gate.Gate)."""
+    servers: dict[str, Any] = {}
+    max_turns = None
     if role is not None:
         if role.problem:
             raise ValueError(f"role {role.id} cannot run: {role.problem}")  # never run a broken file
-        allowed = list(role.tools)
-        denied = [t for t in ROLE_DENY if t not in allowed]
+        builtin = [t for t in role.tools if t in roles.TOOL_CATALOG]
+        acts = [connectors.get(t) for t in role.tools if t not in roles.TOOL_CATALOG]
+        if None in acts:
+            raise ValueError(f"role {role.id} lists a connector that is not installed")
+        if acts and gate is None:
+            raise ValueError("acting tools need the approval gate")  # never run them ungated
+        if acts:
+            servers["hub"] = create_sdk_mcp_server("hub", tools=[_gated_tool(a, gate, role.name) for a in acts])
+        allowed = builtin + [a.tool_name for a in acts]
+        tools = builtin  # `tools` covers built-ins only; the hub server holds only the listed actions
+        denied = [t for t in ROLE_DENY if t not in builtin]
         cwd = role.folder
         model = role.model or model
+        max_turns = role.max_turns  # G-BUDGET-1: the reply stops with "error_max_turns" at this limit
     else:
-        allowed = list(WEB_TOOLS) if web_enabled else []
+        allowed = tools = list(WEB_TOOLS) if web_enabled else []
         denied = DENIED_TOOLS + ([] if web_enabled else WEB_TOOLS)
         cwd = cwd or CHAT_WORKDIR
     cwd.mkdir(parents=True, exist_ok=True)
-    # Web tools are pre-approved. File tools are not, so their calls also reach `gate` (layer 4).
-    pre_approved = [t for t in allowed if t in WEB_TOOLS]
+    # Web tools and gated actions are pre-approved: the hook still checks them, and the approval
+    # gate decides each action. File tools are not, so their calls also reach layer 4.
+    pre_approved = [t for t in allowed if t in WEB_TOOLS or t.startswith("mcp__hub__")]
 
     def refusal(tool: str, tool_input: dict[str, Any]) -> str | None:
         if tool not in allowed:
@@ -285,23 +315,24 @@ def build_options(
         return {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
                                        "permissionDecisionReason": reason}}
 
-    async def gate(tool: str, tool_input: dict[str, Any], _ctx: ToolPermissionContext):
+    async def permission_check(tool: str, tool_input: dict[str, Any], _ctx: ToolPermissionContext):
         # Layer 4: anything that reaches the prompt stage is checked again.
         reason = refusal(tool, tool_input)
         return PermissionResultAllow() if reason is None else PermissionResultDeny(message=reason)
 
     return ClaudeAgentOptions(
-        tools=allowed,                       # layer 1: available set
+        tools=tools,                         # layer 1: available built-ins
         allowed_tools=pre_approved,
         disallowed_tools=denied,             # layer 2: removed and denied by name
         hooks={"PreToolUse": [HookMatcher(matcher=None, hooks=[confine], on_failure="block")]},
-        can_use_tool=gate,
+        can_use_tool=permission_check,
         permission_mode="default",           # never "bypassPermissions"
         system_prompt=role_prompt(role) if role else system_prompt(personality, custom_prompt),
         setting_sources=[],                  # N-SEC-5: no user/project settings or CLAUDE.md
         skills=[],
-        mcp_servers={},
+        mcp_servers=servers,                 # only our own gated server, never the user's
         strict_mcp_config=True,              # ignore any MCP servers in the user's config
+        max_turns=max_turns,
         cwd=str(cwd),
         model=model,
         resume=resume,
@@ -366,7 +397,7 @@ def merge_sources(read: list[dict[str, str]], hits: list[dict[str, str]]) -> lis
 
 @dataclass
 class Event:
-    kind: str  # "init" | "text" | "tool" | "sources" | "retry" | "rate_limit" | "error" | "done"
+    kind: str  # "init" | "text" | "tool" | "turn" | "sources" | "retry" | "rate_limit" | "error" | "done"
     text: str = ""
     data: dict[str, Any] = field(default_factory=dict)
 
@@ -500,6 +531,7 @@ class ChatSession:
         streamed = False  # True once text deltas arrived, so we do not print the full text twice
         # R-AUTH-6: a reset time from an earlier turn may belong to another limit; only this turn's counts.
         self.last_rate_limit = None
+        seen: set[str] = set()  # G-BUDGET-1 / UI 13: one turn = one model message (the CLI may split it)
         read: list[dict[str, str]] = []  # F-WEB-2: pages read and search hits in this reply
         hits: list[dict[str, str]] = []
         async for msg in self.client.receive_response():
@@ -528,6 +560,10 @@ class ChatSession:
                     yield Event("error", msg.error, data={"detail": detail})
                     streamed = False
                     continue
+                key = msg.message_id or msg.uuid or str(len(seen))
+                if key not in seen:
+                    seen.add(key)
+                    yield Event("turn", data={"turn": len(seen), "max": self.options.max_turns})
                 for block in msg.content:
                     if isinstance(block, (ToolUseBlock, ServerToolUseBlock)):
                         yield Event("tool", block.name, data={"input": block.input})
@@ -567,5 +603,6 @@ class ChatSession:
                         "duration_ms": msg.duration_ms,
                         "permission_denials": msg.permission_denials or [],
                         "terminal_reason": msg.terminal_reason,
+                        "num_turns": msg.num_turns,  # G-BUDGET-1: reported when the budget stops a task
                     },
                 )

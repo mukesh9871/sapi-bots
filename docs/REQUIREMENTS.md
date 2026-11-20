@@ -111,14 +111,14 @@ The platform is one general engine: agents with roles, teams, tools, schedules a
 1. **G-TOOL-1:** ✅ A tool is one capability an agent can call: web search, read or write files in a project folder, post to a platform, fill a web form, start a ComfyUI render.
 2. **G-TOOL-2:** ✅ Each tool is marked read-only or acting. Acting tools change something outside the app (post, submit, send, delete).
 3. **G-TOOL-3:** ✅ A role gets only the tools listed in its definition; everything else is unavailable to it.
-4. **G-TOOL-4:** New connectors can be added without changing the engine.
+4. **G-TOOL-4:** ✅ New connectors can be added without changing the engine.
 
 **Approvals**
 
-1. **G-APPR-1:** Every acting tool call follows a rule I set per pack, per platform and per action type: Auto (do it and log it), Ask (hold until I approve), or Never.
-2. **G-APPR-2:** Held items wait in an approvals inbox showing exactly what will be done (the post text and media, the filled application) with Approve, Edit and Reject.
-3. **G-APPR-3:** New rules default to Ask. I switch a rule to Auto only by my own choice in Settings.
-4. **G-APPR-4:** A daily cap per Auto rule (for example 3 posts a day per platform, 10 applications a day) stops runaway loops.
+1. **G-APPR-1:** ✅ Every acting tool call follows a rule I set per pack, per platform and per action type: Auto (do it and log it), Ask (hold until I approve), or Never.
+2. **G-APPR-2:** ✅ Held items wait in an approvals inbox showing exactly what will be done (the post text and media, the filled application) with Approve, Edit and Reject.
+3. **G-APPR-3:** ✅ New rules default to Ask. I switch a rule to Auto only by my own choice in Settings.
+4. **G-APPR-4:** ✅ A daily cap per Auto rule (for example 3 posts a day per platform, 10 applications a day) stops runaway loops.
 
 **Schedules and routines**
 
@@ -127,9 +127,9 @@ The platform is one general engine: agents with roles, teams, tools, schedules a
 
 **Log and budgets**
 
-1. **G-LOG-1:** An activity log records every acting tool call: time, agent, what was done, where, and whether it was Auto or approved by me.
+1. **G-LOG-1:** ✅ An activity log records every acting tool call: time, agent, what was done, where, and whether it was Auto or approved by me.
 2. **G-BUDGET-1:** Each task and each team has a budget (maximum turns and maximum agents working at once). The run stops and reports when the budget is reached.
-3. **G-BUDGET-2:** A global switch pauses all automation, so chatting stays available when my subscription limit is nearly used.
+3. **G-BUDGET-2:** ✅ A global switch pauses all automation, so chatting stays available when my subscription limit is nearly used.
 
 **Instruction packs**
 
@@ -221,7 +221,7 @@ The app should start quickly, stay private on my PC, and fail with clear message
 | N-PERF-3 ✅ | Speed | Only the open chat keeps a live Claude Code process; idle ones are closed, and reopening a chat resumes its session. |
 | N-SEC-6 | Security | Platform logins and keys are kept in the operating system's credential store (Windows Credential Manager), never in config files, logs or chat, and are never shown to an agent; connectors use them on the agent's behalf. |
 | N-SEC-7 | Security | Text that an agent reads from a web page, job listing, comment or file is treated as information, never as an instruction; an acting tool call still has to pass its approval rule. |
-| N-REL-3 | Reliability | An acting tool call is never repeated blindly after a crash or retry: the log is checked first, so nothing is posted or submitted twice. |
+| N-REL-3 ✅ | Reliability | An acting tool call is never repeated blindly after a crash or retry: the log is checked first, so nothing is posted or submitted twice. |
 
 ## Architecture and tech stack
 
@@ -351,9 +351,9 @@ Build in three phases, each usable on its own. Phase 1 is Milestones 1 to 4 (the
 
 **Milestone 6: Approvals, log and budgets**
 
-- [ ] A test acting tool is held in the inbox under Ask, runs under Auto, and is blocked under Never.
-- [ ] Every acting call appears in the activity log, and a daily cap stops further Auto runs.
-- [ ] A task stops and reports when its budget is reached; the pause switch halts all automation.
+- [x] A test acting tool is held in the inbox under Ask, runs under Auto, and is blocked under Never.
+- [x] Every acting call appears in the activity log, and a daily cap stops further Auto runs.
+- [x] A task stops and reports when its budget is reached; the pause switch halts all automation.
 
 **Milestone 7: Teams**
 

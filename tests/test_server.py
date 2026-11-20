@@ -101,7 +101,9 @@ def test_unknown_personality_rejected(server):
 
 
 def test_binds_localhost_only(tmp_path):  # N-SEC-1
-    app = create_app("t", 1, check_login_on_start=False, history=HistoryStore(tmp_path / "chats.db"))
+    from hub.gate.store import GateStore  # never the real data/hub.db (review M6)
+    app = create_app("t", 1, check_login_on_start=False, history=HistoryStore(tmp_path / "chats.db"),
+                     gate_store=GateStore(tmp_path / "hub.db"))
     assert make_server(app, 1).config.host == "127.0.0.1"
 
 

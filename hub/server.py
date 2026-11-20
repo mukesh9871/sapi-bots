@@ -1,4 +1,4 @@
-"""Local hub server: serves the chat window and streams replies (Milestones 2 to 5).
+"""Local hub server: serves the chat window and streams replies (Milestones 2 to 6).
 
 Run:  .venv\\Scripts\\python -m hub.server        (opens your browser)
 
@@ -37,7 +37,10 @@ from hub.auth_check import LOGIN_STEPS, LoginState, check_login, scrub_billing_e
 from hub.chat.claude_session import ChatSession, all_transcript_ids, delete_transcript, transcript_exists
 from hub.chat.history import HistoryStore
 from hub.chat.personalities import PERSONALITIES
-from hub.engine.roles import MODELS, TOOL_CATALOG, Role, RoleError, RoleStore
+from hub.engine.roles import MODELS, Role, RoleError, RoleStore, catalog
+from hub.connectors.base import ActionError
+from hub.gate.gate import Gate, RepeatRun
+from hub.gate.store import GateStore
 
 WEB_DIR = Path(__file__).parent / "web"
 COOKIE = "hub_token"
@@ -70,6 +73,11 @@ class HubState:
     closing_chat_id: int | None = None  # a chat whose Claude process is still shutting down
     stop_pending: bool = False  # Stop pressed during this turn, maybe before its session existed
     roles: RoleStore | None = None  # Milestone 5
+    gate: Gate | None = None  # Milestone 6
+    turn_is_role: bool = False  # the running turn is a role task (pause stops it, G-BUDGET-2)
+    # G-BUDGET-2: held in memory and written through to config.json. Never re-read from the file
+    # per call: a failed read (file busy while it is saved) would fall back to "not paused" (review M6).
+    paused: bool = False
 
 
 class RoleUnavailable(Exception):
@@ -111,9 +119,21 @@ def validate_settings(body: dict[str, Any], current: dict[str, Any]) -> str | No
 
 def create_app(token: str, port: int, *, login: LoginState | None = None,
                notices: list[str] | None = None, check_login_on_start: bool = True,
-               history: HistoryStore | None = None, roles: RoleStore | None = None) -> FastAPI:
+               history: HistoryStore | None = None, roles: RoleStore | None = None,
+               gate_store: GateStore | None = None) -> FastAPI:
     state = HubState(token=token, port=port, login=login or LoginState(None), notices=notices or [],
                      history=history or HistoryStore(), roles=roles or RoleStore())
+    # G-BUDGET-2: the pause switch is read on every acting call, so it applies at once.
+    state.paused, note = config.start_paused()  # fails closed on a busy or broken file (review M6)
+    if note:
+        state.notices.append(note)
+    state.gate = Gate(gate_store or GateStore(), paused=lambda: state.paused)
+    gate = state.gate
+    unknown = gate.recover()  # N-REL-3: calls a crash interrupted are marked, never re-run
+    if unknown:
+        state.notices.append(f"{unknown} action(s) were interrupted when the app last stopped. "
+                             "Check them in the Activity log: they were not run again.")
+    gate.ensure_rules()  # G-APPR-3: every installed action has a rule, Ask by default
     store = state.history
     role_store = state.roles
     role_store.in_use = lambda: {c["role"] for c in store.list_chats() if c["role"]}  # review M5
@@ -222,8 +242,29 @@ def create_app(token: str, port: int, *, login: LoginState | None = None,
         for key in ("bot_name", "avatar"):
             if key in body:
                 body[key] = body[key].strip()
-        cfg = config.save(body)  # M3 check 3; applies from the next message (F-PERS-3)
+        if "automation_paused" in body:
+            state.paused = body["automation_paused"]  # takes effect at once, even if the save below fails
+            if state.paused:
+                await stop_role_turn()  # G-BUDGET-2: pausing also stops a running role task
+        try:
+            # The file always gets the pause state the app is really in. Otherwise saving the theme
+            # after a start-up from a broken file would write "not paused" (review M6).
+            cfg = config.save({**body, "automation_paused": state.paused})  # M3 check 3, F-PERS-3
+        except OSError:
+            # Another program holds config.json (antivirus, sync). Say so plainly (review M6).
+            note = ""
+            if "automation_paused" in body:  # the switch already changed in memory (review M6)
+                now, later = ("paused", "resumes") if state.paused else ("running", "pauses again")
+                note = f" Automation is {now} for now, but this could not be saved, so it {later} after a restart."
+            return _bad("the settings file is busy (another program has it open), so nothing was saved: "
+                        "try again." + note, 503)
         return {"settings": {k: cfg[k] for k in config.EDITABLE}}
+
+    async def stop_role_turn() -> None:
+        if state.busy and state.turn_is_role:
+            state.stop_pending = True  # also covers a session that is still starting, like Stop
+            if state.session:
+                await state.session.stop()
 
     def usable_role(role_id: str) -> Role:
         role = role_store.get(role_id)
@@ -231,6 +272,8 @@ def create_app(token: str, port: int, *, login: LoginState | None = None,
             raise RoleUnavailable("role_missing")
         if role.problem:
             raise RoleUnavailable("role_broken")
+        if state.paused:
+            raise RoleUnavailable("automation_paused")  # G-BUDGET-2: plain chat stays available
         return role
 
     def session_kwargs(chat: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -238,7 +281,7 @@ def create_app(token: str, port: int, *, login: LoginState | None = None,
         if chat and chat.get("role"):
             # G-AGENT-3: a role chat runs as the role (its prompt, tools, folder and model).
             # Personality and the web toggle do not apply. A blank role model uses Settings.
-            return {"role": usable_role(chat["role"]), "model": cfg["model"] or None}
+            return {"role": usable_role(chat["role"]), "model": cfg["model"] or None, "gate": gate}
         personality = cfg["personality"] if cfg["personality"] in PERSONALITIES else "straight"
         if cfg["personality"] == "custom" and cfg["custom_prompt"].strip():
             prompt = cfg["custom_prompt"]
@@ -311,9 +354,12 @@ def create_app(token: str, port: int, *, login: LoginState | None = None,
                 return _bad("this role no longer exists", 404)
             if role.problem:
                 return _bad(f"this role cannot run: {role.problem}")
+            if state.paused:
+                return _bad("automation is paused: resume it to give a role a task", 409)
         if state.busy:
             return _bad("a reply is still streaming", 409)
         state.busy, state.turn_chat_id, state.stop_pending = True, chat_id, False
+        state.turn_is_role = bool(role_id or (chat_id is not None and store.get_chat(chat_id)["role"]))
 
         queue: asyncio.Queue[dict | None] = asyncio.Queue()
 
@@ -323,7 +369,7 @@ def create_app(token: str, port: int, *, login: LoginState | None = None,
             nonlocal chat_id
             reply: list[str] = []
             sources: list[dict] = []  # F-WEB-2: the reply's web sources, saved with it
-            stopped = failed = False
+            stopped = failed = budget = False
             user_msg = None
             created = False  # this turn created the chat
             try:
@@ -370,7 +416,8 @@ def create_app(token: str, port: int, *, login: LoginState | None = None,
                             prompt = None if d["is_error"] else session.options.system_prompt
                             store.set_session(chat_id, session.session_id, prompt)
                         stopped = str(d["terminal_reason"] or "").startswith("aborted")
-                        queue.put_nowait({"kind": "done", "subtype": d["subtype"],
+                        budget = d["subtype"] == "error_max_turns"  # G-BUDGET-1, saved with the reply
+                        queue.put_nowait({"kind": "done", "subtype": d["subtype"], "num_turns": d.get("num_turns"),
                                           "terminal_reason": d["terminal_reason"], "usage": d["usage"]})
                     elif ev.kind == "sources":
                         sources = ev.data["sources"]
@@ -395,7 +442,11 @@ def create_app(token: str, port: int, *, login: LoginState | None = None,
             finally:
                 try:
                     if reply:  # F-HIST-1: the reply is saved, a stopped one too
-                        store.add_message(chat_id, "bot", "".join(reply), "stopped" if stopped else "", sources)
+                        status = "stopped" if stopped else "budget" if budget else ""
+                        store.add_message(chat_id, "bot", "".join(reply), status, sources)
+                    elif budget:
+                        # G-BUDGET-1: stopped at its budget before writing any text; keep the note.
+                        store.add_message(chat_id, "bot", "", "budget", sources)
                     elif failed and user_msg is not None:
                         # No reply: the window puts the message back in the input box for Retry,
                         # so drop it here, or a retry would save it twice.
@@ -533,11 +584,12 @@ def create_app(token: str, port: int, *, login: LoginState | None = None,
     def role_fields(body: dict[str, Any] | None) -> tuple | None:
         if body is None:
             return None
-        return (body.get("name", ""), body.get("model", ""), body.get("tools", []), body.get("instructions", ""))
+        return (body.get("name", ""), body.get("model", ""), body.get("tools", []), body.get("instructions", ""),
+                body.get("max_turns", 30))
 
     @app.get("/api/roles")
     async def list_roles() -> dict[str, Any]:
-        return {"roles": [r.to_dict() for r in role_store.list()], "tools": TOOL_CATALOG, "models": list(MODELS)}
+        return {"roles": [r.to_dict() for r in role_store.list()], "tools": catalog(), "models": list(MODELS)}
 
     @app.post("/api/roles")
     async def create_role(request: Request):
@@ -573,6 +625,66 @@ def create_app(token: str, port: int, *, login: LoginState | None = None,
         if not role_store.delete(role_id):
             return _bad("role not found", 404)
         return {"ok": True}
+
+    # ---- approvals, activity log, rules, pause (Milestone 6) ---------------------------
+    @app.get("/api/gate/summary")
+    async def gate_summary() -> dict[str, Any]:  # UI 8 badge, UI 13 usage bar
+        return {"pending": gate.store.pending_count(), "paused": state.paused}
+
+    @app.get("/api/approvals")
+    async def list_approvals() -> dict[str, Any]:  # G-APPR-2
+        from hub import connectors
+        items = []
+        for item in gate.store.approvals("pending"):
+            action = connectors.get(item["action_id"])
+            items.append({**item, "preview": action.preview(item["payload"]) if action else "",
+                          "fields": action.fields if action else {}})
+        return {"items": items}
+
+    @app.post("/api/approvals/{item_id}/approve")
+    async def approve(item_id: int, request: Request):  # G-APPR-2: Approve, or Edit then Approve
+        body = await read_json(request) or {}
+        try:
+            return await asyncio.to_thread(gate.approve, item_id, body.get("payload"), body.get("confirm_repeat") is True)
+        except KeyError:
+            return _bad("item not found", 404)
+        except RepeatRun as exc:  # the window asks me, then sends confirm_repeat
+            return JSONResponse({"error": str(exc), "repeat": True}, status_code=409)
+        except (ActionError, ValueError) as exc:
+            return _bad(str(exc), 409 if "already decided" in str(exc) else 400)
+
+    @app.post("/api/approvals/{item_id}/reject")
+    async def reject(item_id: int):
+        try:
+            gate.reject(item_id)
+        except KeyError:
+            return _bad("item not found", 404)
+        except ValueError as exc:
+            return _bad(str(exc), 409)
+        return {"ok": True}
+
+    @app.get("/api/activity")
+    async def activity(q: str = "", pack: str = "", platform: str = "", day: str = ""):  # G-LOG-1, UI 12
+        try:
+            return {"entries": gate.store.activity(q, pack, platform, day)}
+        except (ValueError, OSError, OverflowError):  # Windows cannot handle dates before 1970
+            return _bad("date must be YYYY-MM-DD")
+
+    @app.get("/api/rules")
+    async def list_rules() -> dict[str, Any]:
+        return {"rules": gate.store.rules()}
+
+    @app.put("/api/rules")
+    async def set_rule(request: Request):  # G-APPR-1, G-APPR-3: only I change rules, from Settings
+        body = await read_json(request) or {}
+        key = (body.get("pack"), body.get("platform"), body.get("action"))
+        if not all(isinstance(k, str) for k in key) or key not in {(r["pack"], r["platform"], r["action"])
+                                                                   for r in gate.store.rules()}:
+            return _bad("unknown rule", 404)
+        try:
+            return {"rule": gate.store.set_rule(*key, body.get("mode"), body.get("daily_cap"))}
+        except ValueError as exc:
+            return _bad(str(exc))
 
     return app
 
