@@ -8,7 +8,10 @@ A pack is a folder in packs/<id>/ that bundles one type of work:
     packs/<id>/connectors/*.py  connectors (modules that list ACTIONS, as in hub/connectors/)
     packs/<id>/rules.md         suggested approval rules, one per line: "<action id>: ask|never|auto [cap N]"
     packs/<id>/schedules/*.md   default schedules (header: name, run, when, notify; the body is the task)
-    packs/<id>/settings.md      settings I fill in on the Packs page, one per line: "<key> | folder|text | <label>"
+    packs/<id>/settings.md      settings I fill in on the Packs page, one per line:
+                                "<key> | folder|text|longtext|secret | <label>"
+                                A secret (a platform login) is kept in Windows Credential Manager through
+                                keyring: never in hub.db, a file, a log or an agent's context (hard rule).
 
 Installing records the pack in data/hub.db. While it is on, its roles, teams and connectors
 appear (ids "<pack>.<role>"), read-only. Its rules are created as Ask or Never: a suggested
@@ -37,8 +40,11 @@ from hub.scheduler.schedules import ScheduleError, ScheduleStore, parse_when
 PACKS_DIR = PROJECT_ROOT / "packs"
 RESERVED = {LOCAL}  # packs/local holds my own roles and teams, it is not a pack
 SETTING_RE = re.compile(r"[a-z][a-z0-9_]{0,39}")
-SETTING_TYPES = ("folder", "text")
-MAX_SETTING = 400
+SETTING_TYPES = ("folder", "text", "longtext", "secret")
+MAX_SETTING, MAX_LONG_SETTING = 400, 4000
+MAX_SECRET = 1200  # a LinkedIn token is about 500 characters; Windows Vault holds about 1280 (review M10)
+SECRET_NAMES = "__secret_names"  # in hub.db: only the NAMES of secrets that were set, never their values
+KEYRING_SERVICE = "sapi-ai-hub"  # Windows Credential Manager: "sapi-ai-hub" / "<pack>/<key>"
 active: "PackStore | None" = None  # the app's store, so a pack connector can read its settings (setting())
 
 
@@ -53,6 +59,16 @@ def _remote_drive(folder: Path) -> bool:
 def setting(pack_id: str, key: str) -> str:
     """A pack setting I filled in on the Packs page ("" if not set). Pack connectors call this."""
     return (active.settings(pack_id).get(key, "") if active else "") or ""
+
+
+def secret(pack_id: str, key: str) -> str:
+    """A pack's secret setting (a login), read from Windows Credential Manager at the moment a
+    connector needs it. "" if not set. Never pass it to an agent or write it anywhere."""
+    import keyring
+    try:
+        return keyring.get_password(KEYRING_SERVICE, f"{pack_id}/{key}") or ""
+    except Exception:  # no credential store: treated as not set, the connector says so plainly
+        return ""
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS packs (
@@ -264,6 +280,27 @@ class PackStore:
             row = db.execute("SELECT settings FROM packs WHERE id = ?", (pack_id,)).fetchone()
         return json.loads(row[0]) if row else {}
 
+    def view(self, pack_id: str) -> dict[str, str]:
+        """Settings as the Packs page shows them: a secret only as "(set)" or "", never its value."""
+        out = {k: v for k, v in self.settings(pack_id).items() if k != SECRET_NAMES}
+        pack = self.get(pack_id)
+        for spec in (pack.settings if pack else []):
+            if spec["type"] == "secret":
+                out[spec["key"]] = "(set)" if secret(pack_id, spec["key"]) else ""
+        return out
+
+    def forget_secrets(self, pack_id: str) -> None:
+        """Removing a pack removes its logins from Windows Credential Manager too."""
+        import keyring
+        pack = self.get(pack_id)
+        names = {s["key"] for s in (pack.settings if pack else []) if s["type"] == "secret"}
+        names |= set(self.settings(pack_id).get(SECRET_NAMES, []))  # also with its folder gone (review M10)
+        for name in names:
+            try:
+                keyring.delete_password(KEYRING_SERVICE, f"{pack_id}/{name}")
+            except Exception:
+                pass  # not set
+
     def set_settings(self, pack_id: str, values: Any) -> dict[str, str]:
         """Only I fill in settings (Packs page). Raises PackError."""
         pack = self.get(pack_id)
@@ -273,13 +310,20 @@ class PackStore:
             raise PackError("bad settings")
         known = {s["key"]: s for s in pack.settings}
         out = self.settings(pack_id)
+        secrets_to_write: dict[str, str] = {}  # written only after every value passed (review M10)
         for key, value in values.items():
             spec = known.get(key)
             if spec is None:
                 raise PackError(f"unknown setting {key}")
-            if not isinstance(value, str) or len(value) > MAX_SETTING or any(ord(c) < 32 for c in value):
+            limit = {"longtext": MAX_LONG_SETTING, "secret": MAX_SECRET}.get(spec["type"], MAX_SETTING)
+            line_ok = (lambda c: c in "\n\r\t" or ord(c) >= 32) if spec["type"] == "longtext" else (lambda c: ord(c) >= 32)
+            if not isinstance(value, str) or len(value) > limit or not all(line_ok(c) for c in value):
                 raise PackError(f"{spec['label']}: bad value")
             value = value.strip()
+            if spec["type"] == "secret":  # goes to Credential Manager below; "" forgets it
+                secrets_to_write[key] = value
+                out.pop(key, None)  # never stored in hub.db
+                continue
             if spec["type"] == "folder" and value:
                 folder = Path(value)
                 # Checked before is_dir(): never touch a network share, also not written as //host/share
@@ -292,9 +336,27 @@ class PackStore:
                     raise PackError(f"{spec['label']}: give the full path of a folder that exists on this PC")
                 value = str(resolved)
             out[key] = value
+        if secrets_to_write:
+            import keyring
+            names = set(out.get(SECRET_NAMES, []))
+            for key, value in secrets_to_write.items():
+                try:
+                    if value:
+                        keyring.set_password(KEYRING_SERVICE, f"{pack_id}/{key}", value)
+                        names.add(key)
+                    else:
+                        try:
+                            keyring.delete_password(KEYRING_SERVICE, f"{pack_id}/{key}")
+                        except Exception:
+                            pass  # was not set
+                        names.discard(key)
+                except Exception as exc:
+                    raise PackError(f"{known[key]['label']}: Windows Credential Manager refused it "
+                                    f"({type(exc).__name__})") from None
+            out[SECRET_NAMES] = sorted(names)
         with closing(self._conn()) as db, db:
             db.execute("UPDATE packs SET settings = ? WHERE id = ?", (json.dumps(out), pack_id))
-        return out
+        return self.view(pack_id)
 
     def set_keys(self, pack_id: str, action_keys: list[str]) -> None:
         with closing(self._conn()) as db, db:
@@ -395,6 +457,7 @@ def remove(packs: PackStore, gate: Any, schedules: Any, pack_id: str) -> dict[st
                 rejected += 1
             except (KeyError, ValueError):
                 pass  # decided meanwhile
+    packs.forget_secrets(pack_id)  # its logins leave Windows Credential Manager too
     removed_rules = gate.store.delete_rules(pack_id)
     removed_schedules = schedules.delete_pack(pack_id)
     packs.mark_removed(pack_id)

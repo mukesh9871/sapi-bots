@@ -30,7 +30,8 @@ REPEAT_WINDOW = 24 * 3600  # N-REL-3: an identical call within this time is trea
 
 
 def _normal(payload: dict) -> dict:
-    return {k: v.replace("\r\n", "\n") if isinstance(v, str) else v for k, v in payload.items() if v != ""}
+    return {k: v.replace("\r\n", "\n").strip() if isinstance(v, str) else v for k, v in payload.items()
+            if not (isinstance(v, str) and not v.strip())}
 
 
 def _jsonable(payload: Any) -> dict:
@@ -83,6 +84,13 @@ class Gate:
             return GateResult(f"Unknown action {action_id}.", True, "blocked")
         try:
             clean = action.clean(payload)
+            if action.check is not None:  # content rules first: never hold what can never be published
+                try:
+                    action.check(clean)
+                except ActionError:
+                    raise
+                except Exception as exc:  # a connector's check that breaks still refuses, and is logged (G-LOG-1)
+                    raise ActionError(f"the content could not be checked ({type(exc).__name__})") from None
         except ActionError as exc:
             self.store.log(str(uuid.uuid4()), agent, pack, action.platform, action.id, _jsonable(payload),
                            "blocked", detail=f"bad input: {exc}")
@@ -150,6 +158,13 @@ class Gate:
         if rule["mode"] == "never":
             raise ValueError("the rule for this action is now Never: change it in Settings to approve this")
         clean = action.clean(payload if payload is not None else item["payload"])  # raises ActionError
+        if action.check is not None:  # an edit must meet the content rules too; the item stays pending if not
+            try:
+                action.check(clean)
+            except ActionError:
+                raise
+            except Exception as exc:
+                raise ActionError(f"the content could not be checked ({type(exc).__name__})") from None
         # A text box turns CRLF into LF: that alone is not an edit (review M6).
         edited = _normal(clean) != _normal(item["payload"])
         if not edited:

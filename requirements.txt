@@ -1,4 +1,5 @@
 claude-agent-sdk==0.2.180
 fastapi==0.162.5
 uvicorn==0.54.0
+keyring==25.7.0
 pytest

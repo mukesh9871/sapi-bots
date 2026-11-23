@@ -200,3 +200,6 @@ dialog.huge { width: min(1150px, 96vw); max-height: 92vh; }
 .pack-card { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; margin-bottom: 10px; }
 .pack-card > div { margin: 3px 0; }
 label.check { display: flex; gap: 6px; align-items: center; }
+
+/* Milestone 10: the exact text a connector will publish, line breaks kept */
+.exact { white-space: pre-wrap; border-left: 3px solid var(--border); padding: 4px 8px; margin: 6px 0; font-size: 13px; }

@@ -689,8 +689,14 @@ def create_app(token: str, port: int, *, login: LoginState | None = None,
         items = []
         for item in gate.store.approvals("pending"):
             action = connectors.get(item["action_id"])
+            exact = ""
+            if action is not None and action.show is not None:  # Milestone 10: the text the connector builds
+                try:
+                    exact = action.show(item["payload"])
+                except Exception as exc:
+                    exact = f"(cannot be published as it is: {exc})"
             items.append({**item, "preview": action.preview(item["payload"]) if action else "",
-                          "fields": action.fields if action else {}})
+                          "fields": action.fields if action else {}, "exact": exact})
         return {"items": items}
 
     @app.post("/api/approvals/{item_id}/approve")
@@ -704,6 +710,21 @@ def create_app(token: str, port: int, *, login: LoginState | None = None,
             return JSONResponse({"error": str(exc), "repeat": True}, status_code=409)
         except (ActionError, ValueError) as exc:
             return _bad(str(exc), 409 if "already decided" in str(exc) else 400)
+
+    @app.post("/api/approvals/{item_id}/preview")
+    async def preview_approval(item_id: int, request: Request):  # G-APPR-2: the exact text after an edit
+        item = gate.store.approval(item_id)
+        action = connectors.get(item["action_id"]) if item else None
+        if action is None or action.show is None:
+            return _bad("nothing to preview", 404)
+        body = await read_json(request) or {}
+        try:
+            clean = action.clean(body.get("payload", item["payload"]))
+            if action.check is not None:
+                action.check(clean)
+            return {"exact": action.show(clean)}
+        except Exception as exc:
+            return {"exact": "", "problem": str(exc)}
 
     @app.post("/api/approvals/{item_id}/reject")
     async def reject(item_id: int):
@@ -1056,7 +1077,7 @@ def create_app(token: str, port: int, *, login: LoginState | None = None,
             st = states.get(pk.id)
             out.append({**pk.to_dict(), "installed": st is not None, "enabled": bool(st and st["enabled"]),
                         "load_problem": connectors.problems.get(pk.id, ""),
-                        "values": pack_store.settings(pk.id) if st else {}})
+                        "values": pack_store.view(pk.id) if st else {}})  # a secret only as "(set)"
         for pid, st in states.items():  # installed, but its folder is gone: still listed, so it can be removed
             if pid not in on_disk:
                 out.append({"id": pid, "name": pid, "version": "", "description": "", "readme": "", "roles": [],

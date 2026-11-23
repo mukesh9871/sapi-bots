@@ -904,18 +904,43 @@ function approvalCard(item) {
   meta.textContent = `#${item.id} · ${item.agent} wants to ${item.action_id.replace(".", ": ").replace("_", " ")} · ${new Date(item.created_at * 1000).toLocaleString()}`;
   card.append(meta);
   if (item.reason) { const r = document.createElement("div"); r.className = "reason"; r.textContent = `Held because: ${item.reason}`; card.append(r); }
+  const err = document.createElement("div"); err.className = "error-text"; err.hidden = true;
+  const actions = document.createElement("div"); actions.className = "actions";
+  const reject = document.createElement("button"); reject.type = "button"; reject.className = "danger"; reject.textContent = "Reject";
+  const approve = document.createElement("button"); approve.type = "button"; approve.textContent = "Approve";
+  let ex = null, previewTimer = 0, previewSeq = 0, previewOk = true;
+  if (item.exact) { // G-APPR-2: the exact text the connector will publish, rebuilt as I edit the fields
+    ex = document.createElement("div"); ex.className = "exact";
+    ex.textContent = `Will publish exactly: ${item.exact}`;
+    card.append(ex);
+  }
   const boxes = {};
   for (const [key, spec] of Object.entries(item.fields)) {
     const label = document.createElement("label"); label.textContent = spec.description || key;
     const ta = document.createElement("textarea"); ta.rows = key === "text" ? 5 : 1; ta.value = item.payload[key] || "";
     if (spec.max) ta.maxLength = spec.max;
     label.append(ta); card.append(label); boxes[key] = ta;
+    if (ex) ta.addEventListener("input", () => {
+      clearTimeout(previewTimer); // one timer for the whole card
+      previewOk = false; approve.disabled = true; // Approve waits until the text shown is the text that runs
+      const seq = ++previewSeq;
+      previewTimer = setTimeout(async () => {
+        const payload = Object.fromEntries(Object.entries(boxes).map(([k, t]) => [k, t.value]));
+        try {
+          const r = await api("POST", `/api/approvals/${item.id}/preview`, { payload });
+          if (seq !== previewSeq) return; // an older answer arriving late
+          ex.textContent = r.problem ? `Cannot be published like this: ${r.problem}` : `Will publish exactly: ${r.exact}`;
+          previewOk = !r.problem;
+        } catch {
+          if (seq !== previewSeq) return;
+          ex.textContent = "Could not rebuild the text: check the fields.";
+          previewOk = false;
+        }
+        approve.disabled = !previewOk;
+      }, 300);
+    });
   }
-  const err = document.createElement("div"); err.className = "error-text"; err.hidden = true;
-  const actions = document.createElement("div"); actions.className = "actions";
-  const reject = document.createElement("button"); reject.type = "button"; reject.className = "danger"; reject.textContent = "Reject";
-  const approve = document.createElement("button"); approve.type = "button"; approve.textContent = "Approve";
-  const busy = (on) => { approve.disabled = reject.disabled = on; };
+  const busy = (on) => { reject.disabled = on; approve.disabled = on || !previewOk; };
   approve.onclick = async () => {
     busy(true);
     const payload = Object.fromEntries(Object.entries(boxes).map(([k, ta]) => [k, ta.value]));
@@ -1450,14 +1475,29 @@ async function loadPacks() {
       const inputs = {};
       for (const st of pk.settings) {
         const l = document.createElement("label"); l.className = "block"; l.textContent = st.label + " ";
-        const inp = document.createElement("input"); inp.value = (pk.values || {})[st.key] || ""; inp.maxLength = 400;
+        const current = (pk.values || {})[st.key] || "";
+        let inp;
+        if (st.type === "longtext") { inp = document.createElement("textarea"); inp.rows = 2; inp.maxLength = 4000; inp.value = current; }
+        else if (st.type === "secret") { // Milestone 10: a login, kept in Windows Credential Manager, never shown
+          inp = document.createElement("input"); inp.type = "password"; inp.autocomplete = "off"; inp.maxLength = 1200;
+          inp.placeholder = current ? "set (leave blank to keep it)" : "not set";
+          const forget = document.createElement("button"); forget.type = "button"; forget.className = "ghost"; forget.textContent = "Forget";
+          forget.hidden = !current;
+          forget.onclick = async () => {
+            try { await api("POST", `/api/packs/${encodeURIComponent(pk.id)}/settings`, { values: { [st.key]: "" } }); flash("Removed from Windows Credential Manager."); }
+            catch (err) { flash(`Could not remove it: ${err.message}.`, true); }
+            loadPacks();
+          };
+          l.append(inp, forget); inputs[st.key] = inp; inp.dataset.secret = "1"; fs.append(l); continue;
+        } else { inp = document.createElement("input"); inp.maxLength = 400; inp.value = current; }
         if (st.type === "folder") inp.placeholder = "C:\\Users\\me\\Downloads";
         inputs[st.key] = inp; l.append(inp); fs.append(l);
       }
       const save = document.createElement("button"); save.type = "button"; save.className = "ghost"; save.textContent = "Save settings";
       save.onclick = async () => {
-        const values = Object.fromEntries(Object.entries(inputs).map(([k, i]) => [k, i.value]));
-        try { await api("POST", `/api/packs/${encodeURIComponent(pk.id)}/settings`, { values }); flash("Settings saved."); }
+        // a blank secret field means "keep it": only a typed secret is sent
+        const values = Object.fromEntries(Object.entries(inputs).filter(([, i]) => !(i.dataset.secret && !i.value)).map(([k, i]) => [k, i.value]));
+        try { await api("POST", `/api/packs/${encodeURIComponent(pk.id)}/settings`, { values }); flash("Settings saved."); loadPacks(); }
         catch (err) { flash(`Could not save: ${err.message}.`, true); }
       };
       fs.append(save); settings.append(fs);

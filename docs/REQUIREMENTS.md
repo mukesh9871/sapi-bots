@@ -156,14 +156,15 @@ Roles: job scout, resume writer, application filler, tracker.
 
 Roles: trend analyst, content writer, publisher, analytics reporter.
 
-1. **P-SOC-1:** A brand profile per channel holds niche, voice, audience, and topics never to post about.
-2. **P-SOC-2:** A daily trend report lists rising topics in my niche for each platform, with links.
-3. **P-SOC-3:** A weekly content calendar proposes what to post, where and when.
-4. **P-SOC-4:** The writer drafts posts, captions, titles, descriptions and hashtags, fitted to each platform's format.
-5. **P-SOC-5:** Approval rules by post type. Suggested defaults: Auto for routine posts I have defined (announcing my own new video, scheduled series posts); Ask for anything else, including replies to people, opinions, and any post naming a person or brand.
-6. **P-SOC-6:** Posting goes only through each platform's official API, never by imitating a browser.
-7. **P-SOC-7:** A weekly analytics summary shows what worked and adjusts the next calendar.
-8. **P-SOC-8:** Posts follow each platform's rules for labelling AI-generated media.
+1. **P-SOC-1:** ✅ A brand profile per channel holds niche, voice, audience, and topics never to post about.
+2. **P-SOC-2:** ✅ A daily trend report lists rising topics in my niche for each platform, with links.
+3. **P-SOC-3:** ✅ A weekly content calendar proposes what to post, where and when.
+4. **P-SOC-4:** ✅ The writer drafts posts, captions, titles, descriptions and hashtags, fitted to each platform's format.
+5. **P-SOC-5:** ✅ Approval rules by post type. Suggested defaults: Auto for routine posts I have defined (announcing my own new video, scheduled series posts); Ask for anything else, including replies to people, opinions, and any post naming a person or brand.
+6. **P-SOC-6:** ✅ Posting goes only through each platform's official API, never by imitating a browser.
+7. **P-SOC-7:** (Built: a weekly summary of what was posted, held or refused, which the next calendar reads.
+   Engagement numbers need each platform's statistics API, not built yet.) A weekly analytics summary shows what worked and adjusts the next calendar.
+8. **P-SOC-8:** (Version 1 posts text only, so there is no media to label yet.) Posts follow each platform's rules for labelling AI-generated media.
 
 | Platform | How the bot posts | What to know |
 | --- | --- | --- |
@@ -371,8 +372,8 @@ Build in three phases, each usable on its own. Phase 1 is Milestones 1 to 4 (the
 
 **Milestone 10: Social media manager pack**
 
-- [ ] Daily trend report and weekly calendar arrive on schedule.
-- [ ] One platform posts through its official API under Ask, then one routine post type under Auto; other platforms follow one at a time.
+- [ ] Daily trend report and weekly calendar arrive on schedule. (Built and tested: two weeks on a simulated clock, and the trend report run live. Real scheduled runs over days are still to do.)
+- [ ] One platform posts through its official API under Ask, then one routine post type under Auto; other platforms follow one at a time. (Built and tested: LinkedIn's Posts API against a stand-in server, and the full Ask then Auto flow live on the demo channel. A real LinkedIn post needs your account and token.)
 
 **Milestone 11: Job applications pack**
 

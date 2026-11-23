@@ -28,6 +28,12 @@ class Action:
     run: Callable[[dict[str, Any]], str]  # does it; returns a short result for the log
     acting: bool = True  # False = read-only (no approval needed)
     required: tuple[str, ...] = field(default=())
+    # Optional: the exact text that will be published, when the connector builds it from the fields
+    # (Milestone 10, a routine announcement). Shown in the approval so it is exactly what happens (G-APPR-2).
+    show: Callable[[dict[str, Any]], str] | None = None
+    # Optional: a rule the content must meet (for example "never post about these topics"). The gate runs
+    # it before deciding, so content that can never be published is refused, not held for approval.
+    check: Callable[[dict[str, Any]], None] | None = None
 
     @property
     def id(self) -> str:
@@ -62,12 +68,17 @@ class Action:
                 raise ActionError(f"{key} is required")
             if len(value) > spec.get("max", 10_000):
                 raise ActionError(f"{key} is too long")
-            out[key] = value
+            out[key] = value.strip()  # "Video " and "Video" are the same request (the repeat check, review M10)
         return out
 
     def preview(self, payload: dict[str, str]) -> str:
         """Exactly what will be done (G-APPR-2), as plain text."""
         lines = [f"{self.platform}: {self.name.replace('_', ' ')}"]
+        if self.show is not None:
+            try:
+                lines.append(f"Will publish exactly:\n{self.show(payload)}")
+            except Exception as exc:  # a field the connector would refuse: say so in the preview
+                lines.append(f"(This cannot be published as it is: {exc})")
         for key in self.fields:
             if payload.get(key):
                 lines.append(f"{key}:\n{payload[key]}")

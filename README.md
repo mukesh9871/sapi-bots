@@ -20,7 +20,8 @@ boxes and ✅ marks there show what is built and tested.
 | | 7. Teams | Done |
 | | 8. Scheduler and pack format | Ready to test |
 | 3. Instruction packs | 9. Routine automation | Ready to test (the week-long check is yours) |
-| | 10 to 13. Social media, jobs, software team, video | Not started |
+| | 10. Social media manager | Ready to test (a real LinkedIn post needs your account) |
+| | 11 to 13. Jobs, software team, video | Not started |
 
 ## What it does today
 
@@ -121,6 +122,26 @@ boxes and ✅ marks there show what is built and tested.
   it, the steps and the time. You check it, and nothing is saved until you press Save.
   The form also shows which outside actions the chosen role may take and the approval
   rule for each.
+- **Social media manager pack** (install it on the Packs page): a trend analyst, a
+  content writer, a publisher, an analytics reporter and a social lead (plus a "Post
+  team" of lead, writer and publisher).
+  - **Channels:** LinkedIn, through LinkedIn's official Posts API, and a **Demo channel**
+    (writes to `data/outbox/social-demo.md`) to try everything without an account.
+  - **Brand profile per channel** on the Packs page: niche, voice, audience and topics
+    never to post about. A post that mentions a "never" topic is refused before it
+    reaches Approvals.
+  - **Two kinds of post per channel:** *Post* (any text, Ask) and *Announcement* (a title,
+    one line and a link to one of the sites you list on the Packs page, put together by the
+    connector in a fixed format with no tags or symbols; suggested Auto, installed as Ask). Approvals show exactly the text that will be posted. Switch the
+    announcement rule to Auto in Settings as the first Auto step. The daily cap stops a
+    runaway loop.
+  - **Schedules** (installed switched off): daily trend report with links (08:00),
+    weekly content calendar (Mondays 08:30), weekly analytics summary (Fridays 17:00). The
+    summary covers what was posted, held or refused (engagement numbers come later, from each
+    platform's statistics API), and the next calendar reads it.
+  - **LinkedIn set-up:** your member URN (`urn:li:person:...`) and an access token with
+    `w_member_social` from your LinkedIn developer app. The token goes straight into
+    Windows Credential Manager: the Packs page only shows "set", and **Forget** removes it.
 - **Tell me when done:** a schedule with this ticked shows its result in the window
   (and as a desktop notice, if you allow it) when it finishes. Good for reminders.
 - **Terminal chat** for quick use without the window.
@@ -211,6 +232,8 @@ Everything stays on your PC. None of these are committed to git.
 | Team templates | `packs/local/teams/<id>.md` (readable, safe to edit by hand) |
 | Packs | `packs/<id>/` (the sample and routines packs are part of the app; which ones are installed, and their settings, are in `data/hub.db`) |
 | Schedules and their runs | `data/hub.db` (SQLite) |
+| Platform logins (for example the LinkedIn token) | Windows Credential Manager, under `sapi-ai-hub` (never in a file) |
+| Social demo channel output | `data/outbox/social-demo.md` |
 | Each team run's working folder (its files and `REPORT.md`) | `projects/team-<run>/` |
 | Approval rules, inbox, activity log, team runs (steps, log, questions) | `data/hub.db` (SQLite; the activity log is append-only) |
 | Demo connector output | `data/outbox/notes.md` and `data/outbox/sample-notes.md` (sample pack) |
@@ -269,7 +292,9 @@ packs/<id>/roles/*.md       roles (same format as your own)
 packs/<id>/teams/*.md       teams (a plain role id means this pack's role)
 packs/<id>/connectors/*.py  connectors (modules that list ACTIONS, like hub/connectors/)
 packs/<id>/rules.md         suggested rules, one per line: "<action id>: ask|never|auto [cap N]"
-packs/<id>/settings.md      settings you fill in on the Packs page: "<key> | folder|text | <label>"
+packs/<id>/settings.md      settings you fill in on the Packs page:
+                            "<key> | folder|text|longtext|secret | <label>" (a secret goes to
+                            Windows Credential Manager, never to a file)
 packs/<id>/schedules/*.md   schedules: header "name", "run: role <id>" or "run: team <id>",
                             "notify: yes" (tell me when done),
                             "when: daily 08:00" (or weekly mon,fri 09:30 / every 90 minutes /
@@ -376,6 +401,7 @@ tests/               pytest suite (offline and live)
 docs/REQUIREMENTS.md full specification and milestones
 packs/sample/         sample pack (Milestone 8)
 packs/routines/       routine automation pack (Milestone 9)
+packs/social/         social media manager pack (Milestone 10)
 start.bat            starts the chat window
 ```
 
@@ -400,7 +426,7 @@ In PowerShell, use `$env:HUB_LIVE='1'` instead of `set HUB_LIVE=1`.
 - Offline tests use a temporary database and a fake Claude session. They never touch
   your real `data/chats.db`.
 - Live tests use your subscription (a few short messages, mostly on Haiku).
-- Current result: 447 passed (417 offline, 30 live).
+- Current result: 476 passed (444 offline, 32 live).
 
 ## Working rules for development
 
