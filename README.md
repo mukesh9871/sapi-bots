@@ -16,8 +16,9 @@ boxes and ✅ marks there show what is built and tested.
 | | 3. History and settings | Done |
 | | 4. Web search and polish | Done |
 | 2. Generic platform | 5. Roles and single agents | Done |
-| | 6. Approvals, log and budgets | Ready to test |
-| | 7 to 8. Teams, scheduler, pack format | Not started |
+| | 6. Approvals, log and budgets | Done |
+| | 7. Teams | Ready to test |
+| | 8. Scheduler and pack format | Not started |
 | 3. Instruction packs | 9 to 13. Routines, social media, jobs, software team, video | Not started |
 
 ## What it does today
@@ -56,6 +57,27 @@ boxes and ✅ marks there show what is built and tested.
 - **Budgets and pause:** each role has a turn budget per task (default 30); a task that
   uses it all stops and says so. The **Pause** button at the bottom stops role tasks and
   holds every action, so plain chat stays available when your limit is nearly used.
+- **Teams:** the **Teams** button opens a page where you build a team from your roles:
+  a lead, an optional reviewer and the workers (a role can appear twice), plus "most
+  members at once" (default 2, not counting the lead) and "most turns per run" (default
+  100). Save it as a template, give it a task, and watch the board.
+  - The lead splits the task into steps, gives them to members, collects the results
+    and ends with a report (saved as `REPORT.md`). It cannot finish until the reviewer
+    has checked the latest work.
+  - Each member runs as its own role (its tools, model and approvals), one step at a
+    time, and works only in the run's folder `projects/team-<run>/`. A role with no
+    model uses the Settings model.
+  - The review gate counts only members' steps. Give the lead a role without `Write`
+    or `Edit`, so it cannot change files after the review.
+  - The board shows one column per member: status (waiting, working, blocked, done),
+    current step and output so far, plus the report and a log of what happened.
+  - **Pause** interrupts running steps (and the lead, if it is working) and keeps what
+    they wrote. **Resume**, **Stop** and **Message** work at any time. A message
+    (redirect) reaches the lead the next time it checks for results, and the lead cannot
+    finish before it has read it. A member can ask you a question, and the board shows
+    it with an answer box.
+  - A run that uses its turn budget stops and says so. The global Pause pauses every
+    team. After a restart, unfinished runs are marked stopped and never re-run.
 - **Terminal chat** for quick use without the window.
 
 ## Requirements
@@ -141,7 +163,9 @@ Everything stays on your PC. None of these are committed to git.
 | Exports | `exports/` |
 | Roles | `packs/local/roles/<id>.md` (readable, safe to edit by hand) |
 | Each role's working folder | `projects/role-<id>/` |
-| Approval rules, inbox, activity log | `data/hub.db` (SQLite; the log is append-only) |
+| Team templates | `packs/local/teams/<id>.md` (readable, safe to edit by hand) |
+| Each team run's working folder (its files and `REPORT.md`) | `projects/team-<run>/` |
+| Approval rules, inbox, activity log, team runs (steps, log, questions) | `data/hub.db` (SQLite; the activity log is append-only) |
 | Demo connector output | `data/outbox/notes.md` |
 
 **Settings in `config.json`:**
@@ -190,6 +214,26 @@ A file that lists anything else (for example `Bash`) is marked
 "needs fixing" and never runs. Deleting a role keeps its chats (readable, not
 continuable) and its folder.
 
+**A team file** looks like this. Members are role ids (comma-separated), and the notes
+below the header go to the lead:
+
+```
+---
+name: Writers
+lead: manager
+reviewer: reviewer
+members: writer, writer
+max_agents: 2
+max_turns: 100
+---
+Keep each step short.
+```
+
+`max_agents` is 1 to 5 and `max_turns` is 10 to 1000 (all members added up). The lead
+and reviewer cannot also be workers, and a team has at most 8 workers. Deleting a run
+removes its board records and session files but keeps its folder. Delete all history
+also removes all team runs (not their folders), and is refused while a team is running.
+
 Deleting a chat removes its rows in `chats.db` and its session files in this app's own
 folder under `.claude\projects`. It never touches your other Claude Code projects.
 
@@ -212,6 +256,9 @@ folder under `.claude\projects`. It never touches your other Claude Code project
   read (`CLAUDE.md`, `AGENTS.md`, `.claude`, `.git`, `.vscode` and similar), Windows
   shortcut-type files (`.url`, `.lnk`, `desktop.ini`) and files pytest would run
   (`conftest.py`, `test_*.py`). `pytest.ini` also keeps pytest out of `projects/`.
+- **A team stays in its folder.** Every member, the lead too, gets the same folder
+  check, on the run's folder `projects/team-<run>/`. Workers can only ask you
+  questions. Only the lead can assign steps or finish.
 - **Web text is information, not instructions.**
 - **Every outside action goes through the approval gate.** Its rule decides: Auto (up to
   the daily cap), Ask or Never. Pause holds everything. Only you change rules, and only
@@ -235,6 +282,9 @@ hub/
     personalities.py   built-in prompts
   engine/
     roles.py           role files: read, check, save, copy, delete (Milestone 5)
+    teams.py           team template files: read, check, save, delete (Milestone 7)
+    runs.py            team runs in data/hub.db: steps, log, questions, restart handling
+    orchestrator.py    runs a team: lead tools, member steps, pause, stop, review gate, budgets
   gate/
     gate.py            approval gate: rules, caps, pause, repeats, approve and reject (Milestone 6)
     store.py           data/hub.db: rules, approvals inbox, append-only activity log
@@ -271,7 +321,7 @@ In PowerShell, use `$env:HUB_LIVE='1'` instead of `set HUB_LIVE=1`.
 - Offline tests use a temporary database and a fake Claude session. They never touch
   your real `data/chats.db`.
 - Live tests use your subscription (a few short messages, mostly on Haiku).
-- Current result: 310 passed (286 offline, 24 live).
+- Current result: 366 passed (340 offline, 26 live).
 
 ## Working rules for development
 

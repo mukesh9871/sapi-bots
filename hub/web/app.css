@@ -164,3 +164,29 @@ table.grid td.wrap { overflow-wrap: anywhere; }
 .table-wrap { max-height: 55vh; overflow: auto; margin-top: 8px; }
 .filters input { min-width: 0; }
 .outcome-failed, .outcome-unknown, .decision-blocked { color: var(--danger); }
+
+/* Milestone 7: teams and the board */
+dialog.huge { width: min(1150px, 96vw); max-height: 92vh; }
+.roles-side h3 { margin: 10px 0 0; font-size: 14px; }
+#team-list, #run-list { list-style: none; margin: 0; padding: 0; max-height: 28vh; overflow-y: auto; }
+#team-list li, #run-list li { padding: 5px 8px; border-radius: 8px; cursor: pointer; font-size: 13.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#team-list li:hover, #team-list li.active, #run-list li:hover, #run-list li.active { background: var(--hover); }
+.team-main { flex: 1; min-width: 0; }
+#team-form input:not([type]), #team-form select { min-width: 10em; }
+.chips { list-style: none; padding: 0; margin: 0 0 6px; display: flex; flex-wrap: wrap; gap: 6px; }
+.chips li { border: 1px solid var(--border); border-radius: 14px; padding: 2px 4px 2px 10px; font-size: 13px; }
+.chips button { background: none; color: var(--muted); padding: 0 6px; }
+.board-head { margin-bottom: 8px; }
+.pill { font-size: 12px; border: 1px solid var(--border); border-radius: 10px; padding: 0 8px; }
+.columns { display: flex; gap: 10px; overflow-x: auto; margin-top: 10px; padding-bottom: 6px; }
+.column { flex: 1 0 210px; border: 1px solid var(--border); border-radius: 10px; padding: 8px; min-width: 210px; }
+.column h4 { margin: 0 0 4px; font-size: 14px; }
+.column .status { font-size: 12px; font-weight: 600; }
+.status.working { color: var(--ok); } .status.blocked { color: var(--danger); }
+.column .step { font-size: 12.5px; color: var(--muted); margin: 4px 0; max-height: 6em; overflow: auto; }
+.column pre { white-space: pre-wrap; font-size: 12px; max-height: 14em; overflow: auto; margin: 0; }
+.question { border: 1px solid var(--danger); border-radius: 10px; padding: 8px; margin-top: 8px; }
+.question .row input { flex: 1; }
+.report { font-size: 14px; }
+.events { font-size: 12.5px; padding-left: 18px; max-height: 20vh; overflow: auto; }
+#run-message { flex: 1; min-width: 8em; }

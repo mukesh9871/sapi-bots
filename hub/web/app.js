@@ -997,6 +997,183 @@ async function loadRules() {
   $("rules-empty").hidden = rules.length > 0;
 }
 
+// ---------- Milestone 7: teams and the board ----------
+let teamsList = [];
+let editingTeam = null; // id of the team in the editor, null = new
+let teamMembers = []; // role ids of the workers being edited
+let boardRun = null; // run id on the board
+let boardTimer = 0;
+const roleName = (id) => (roleById(id) || { name: id }).name;
+
+function fillRoleSelect(sel, withNone) {
+  const opts = (withNone ? [["", "(no reviewer)"]] : []).concat(roles.filter((r) => !r.problem).map((r) => [r.id, r.name]));
+  sel.replaceChildren(...opts.map(([v, t]) => { const o = document.createElement("option"); o.value = v; o.textContent = t; return o; }));
+}
+
+async function openTeams() {
+  try { await loadRoles(); await loadTeams(); await loadRuns(); } catch (err) { flash(`Could not load teams: ${err.message}.`, true); return; }
+  if (boardRun !== null) showBoard(boardRun); else editTeam(teamsList[0]?.id ?? null);
+  if (!$("teams-dialog").open) $("teams-dialog").showModal();
+}
+
+async function loadTeams() {
+  ({ teams: teamsList } = await api("GET", "/api/teams"));
+  $("team-list").replaceChildren(...teamsList.map((t) => {
+    const li = document.createElement("li");
+    li.textContent = t.problem ? `⚠ ${t.name}` : t.name;
+    li.title = t.problem ? `Needs fixing: ${t.problem}` : t.name;
+    li.classList.toggle("active", boardRun === null && t.id === editingTeam);
+    li.onclick = () => editTeam(t.id);
+    return li;
+  }));
+}
+
+const RUN_LABELS = { running: "running", paused: "paused", done: "done", stopped: "stopped", failed: "failed" };
+async function loadRuns() {
+  const { runs } = await api("GET", "/api/runs");
+  $("run-list").replaceChildren(...runs.map((r) => {
+    const li = document.createElement("li");
+    li.textContent = `#${r.id} ${r.team_name} · ${RUN_LABELS[r.status] || r.status}`;
+    li.title = r.task;
+    li.classList.toggle("active", r.id === boardRun);
+    li.onclick = () => showBoard(r.id);
+    return li;
+  }));
+  $("run-list-empty").hidden = runs.length > 0;
+}
+
+function showMembers() {
+  $("team-members").replaceChildren(...teamMembers.map((rid, i) => {
+    const li = document.createElement("li"); li.textContent = roleName(rid);
+    const x = document.createElement("button"); x.type = "button"; x.textContent = "×"; x.title = "Remove";
+    x.onclick = () => { teamMembers.splice(i, 1); showMembers(); };
+    li.append(x); return li;
+  }));
+}
+
+function editTeam(id) {
+  stopBoard();
+  const t = id ? teamsList.find((x) => x.id === id) : null;
+  editingTeam = t ? t.id : null;
+  $("run-board").hidden = true; $("team-form").hidden = false;
+  fillRoleSelect($("team-lead"), false); fillRoleSelect($("team-reviewer"), true); fillRoleSelect($("team-add-role"), false);
+  $("team-name").value = t ? t.name : "";
+  $("team-lead").value = t ? t.lead : ""; $("team-reviewer").value = t ? t.reviewer : "";
+  teamMembers = t ? [...t.members] : [];
+  showMembers();
+  $("team-agents").value = t ? t.max_agents : 2; $("team-turns").value = t ? t.max_turns : 100;
+  $("team-notes").value = t ? t.notes : "";
+  $("team-problem").textContent = t && t.problem ? `This team cannot start until it is fixed: ${t.problem}.` : "";
+  $("team-problem").hidden = !(t && t.problem);
+  $("team-error").hidden = true;
+  $("team-delete").hidden = !t; $("team-start-box").hidden = !t;
+  loadTeams(); loadRuns();
+}
+
+function teamError(msg) { $("team-error").textContent = msg; $("team-error").hidden = false; }
+$("team-add").onclick = () => { if ($("team-add-role").value) { teamMembers.push($("team-add-role").value); showMembers(); } };
+$("team-new").onclick = () => editTeam(null);
+$("team-form").onsubmit = async (e) => {
+  e.preventDefault();
+  const body = { name: $("team-name").value, lead: $("team-lead").value, reviewer: $("team-reviewer").value,
+    members: teamMembers, max_agents: Number($("team-agents").value), max_turns: Number($("team-turns").value),
+    notes: $("team-notes").value };
+  try {
+    const { team } = editingTeam === null ? await api("POST", "/api/teams", body) : await api("PUT", `/api/teams/${editingTeam}`, body);
+    await loadTeams(); editTeam(team.id); flash("Team saved.");
+  } catch (err) { teamError(`Could not save: ${err.message}.`); }
+};
+$("team-delete").onclick = async () => {
+  const t = teamsList.find((x) => x.id === editingTeam);
+  if (!t || !confirm(`Delete the team "${t.name}"? Its past runs stay on the board.`)) return;
+  try { await api("DELETE", `/api/teams/${t.id}`); await loadTeams(); editTeam(teamsList[0]?.id ?? null); }
+  catch (err) { teamError(`Could not delete: ${err.message}.`); }
+};
+$("team-start").onclick = async () => {
+  const task = $("team-task").value.trim();
+  if (!task) { teamError("Write the task first."); return; }
+  try {
+    const { run_id } = await api("POST", `/api/teams/${editingTeam}/runs`, { task });
+    $("team-task").value = "";
+    showBoard(run_id);
+  } catch (err) { teamError(`Could not start: ${err.message}.`); }
+};
+
+// G-TEAM-4: one column per member with status, current step and latest output.
+function stopBoard() { clearTimeout(boardTimer); boardRun = null; }
+async function showBoard(runId) {
+  clearTimeout(boardTimer);
+  boardRun = runId;
+  $("team-form").hidden = true; $("run-board").hidden = false;
+  let data;
+  try { data = await api("GET", `/api/runs/${runId}`); }
+  catch (err) { flash(`Could not load the run: ${err.message}.`, true); editTeam(teamsList[0]?.id ?? null); return; }
+  if (boardRun !== runId) return; // another run was opened meanwhile
+  const run = data.run, live = run.status === "running" || run.status === "paused";
+  const closing = !!data.closing; // ended, but its sessions are still closing: Delete comes after
+  $("run-title").textContent = `#${run.id} ${run.team_name}`;
+  $("run-status").textContent = RUN_LABELS[run.status] || run.status;
+  $("run-meta").textContent = `Turns used ${run.turns_used} of ${run.max_turns} · at most ${run.max_agents} at once · folder ${run.folder}`
+    + (run.reason ? ` · ${run.reason}` : "") + (closing ? " · closing…" : "");
+  $("run-task").textContent = `Task: ${run.task}`;
+  $("run-pause").hidden = !live; $("run-stop").hidden = !live; $("run-delete").hidden = live || closing;
+  $("run-message").hidden = !live; $("run-send").hidden = !live;
+  $("run-pause").textContent = run.status === "paused" ? "Resume" : "Pause";
+  $("run-columns").replaceChildren(...data.board.members.map((m) => {
+    const col = document.createElement("div"); col.className = "column";
+    const h = document.createElement("h4"); h.textContent = `${m.name} (${m.key})`;
+    const st = document.createElement("div"); st.className = `status ${m.status}`; st.textContent = m.status;
+    const step = document.createElement("div"); step.className = "step"; step.textContent = m.step ? `Step: ${m.step}` : "";
+    const out = document.createElement("pre"); out.textContent = m.output || "";
+    col.append(h, st, step, out); return col;
+  }));
+  // G-TEAM-5: questions a member raises, answered here. Rebuilt only when the questions
+  // change, so an answer being typed survives the 2 s refresh.
+  const qKey = `${run.id}:${data.questions.map((q) => q.id).join(",")}`;
+  const qBox = $("run-questions");
+  if (qBox.dataset.key !== qKey) { qBox.dataset.key = qKey; qBox.replaceChildren(...data.questions.map((q) => {
+    const box = document.createElement("div"); box.className = "question";
+    const p = document.createElement("div"); p.textContent = `${q.member} asks: ${q.question}`;
+    const row = document.createElement("div"); row.className = "row";
+    const input = document.createElement("input"); input.placeholder = "Your answer";
+    const b = document.createElement("button"); b.type = "button"; b.textContent = "Answer";
+    b.onclick = async () => {
+      try { await api("POST", `/api/runs/${run.id}/answer`, { question_id: q.id, text: input.value }); showBoard(run.id); }
+      catch (err) { flash(`Could not answer: ${err.message}.`, true); }
+    };
+    row.append(input, b); box.append(p, row); return box;
+  })); }
+  $("run-report-box").hidden = !run.report;
+  $("run-report").innerHTML = run.report ? renderMarkdown(run.report) : ""; // sanitized like any reply
+  $("run-events").replaceChildren(...data.events.slice(-40).map((e) => {
+    const li = document.createElement("li");
+    li.textContent = `${new Date(e.at * 1000).toLocaleTimeString()} · ${e.who}: ${e.text}`; return li;
+  }));
+  loadRuns().catch(() => {});
+  if ((live || closing) && $("teams-dialog").open) boardTimer = setTimeout(() => showBoard(runId), 2000);
+}
+
+async function runAction(action, body) {
+  try { await api("POST", `/api/runs/${boardRun}/${action}`, body); showBoard(boardRun); }
+  catch (err) { flash(`Could not ${action}: ${err.message}.`, true); }
+}
+$("run-pause").onclick = () => runAction($("run-pause").textContent === "Resume" ? "resume" : "pause");
+$("run-stop").onclick = () => { if (confirm("Stop this team? Work done so far is kept.")) runAction("stop"); };
+$("run-send").onclick = () => {
+  const text = $("run-message").value.trim();
+  if (!text) return;
+  $("run-message").value = "";
+  runAction("message", { text });
+};
+$("run-delete").onclick = async () => {
+  if (!confirm("Delete this run's record? Its files in the project folder are kept.")) return;
+  try { await api("DELETE", `/api/runs/${boardRun}`); stopBoard(); await loadRuns(); editTeam(teamsList[0]?.id ?? null); }
+  catch (err) { flash(`Could not delete: ${err.message}.`, true); }
+};
+$("open-teams").onclick = openTeams;
+$("teams-close").onclick = () => { clearTimeout(boardTimer); $("teams-dialog").close(); };
+$("teams-dialog").addEventListener("close", () => clearTimeout(boardTimer));
+
 // ---------- new chat ----------
 els.newChat.onclick = async () => {
   if (closing) await closing; // the server is busy closing an idle process

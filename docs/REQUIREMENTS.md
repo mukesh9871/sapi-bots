@@ -99,12 +99,12 @@ The platform is one general engine: agents with roles, teams, tools, schedules a
 
 **Teams**
 
-1. **G-TEAM-1:** A team is a set of roles plus a workflow: who starts, who hands work to whom, who reviews, and who reports to me.
-2. **G-TEAM-2:** I can assemble a team for a task or project by picking roles (for example architect, manager, developer 1 and 2, tester 1 and 2, reviewer), and save it as a template.
-3. **G-TEAM-3:** One lead role (manager, producer) breaks the task into steps, assigns them, and collects results.
-4. **G-TEAM-4:** A team board shows each member's current step, output so far, and status (waiting, working, blocked, done).
-5. **G-TEAM-5:** I can pause, stop or redirect a team at any time, and answer questions a member raises.
-6. **G-TEAM-6:** Each team works in its own project folder; members see only that folder.
+1. **G-TEAM-1:** ✅ A team is a set of roles plus a workflow: who starts, who hands work to whom, who reviews, and who reports to me.
+2. **G-TEAM-2:** ✅ I can assemble a team for a task or project by picking roles (for example architect, manager, developer 1 and 2, tester 1 and 2, reviewer), and save it as a template.
+3. **G-TEAM-3:** ✅ One lead role (manager, producer) breaks the task into steps, assigns them, and collects results.
+4. **G-TEAM-4:** ✅ A team board shows each member's current step, output so far, and status (waiting, working, blocked, done).
+5. **G-TEAM-5:** ✅ I can pause, stop or redirect a team at any time, and answer questions a member raises.
+6. **G-TEAM-6:** ✅ Each team works in its own project folder; members see only that folder.
 
 **Tools and connectors**
 
@@ -128,7 +128,7 @@ The platform is one general engine: agents with roles, teams, tools, schedules a
 **Log and budgets**
 
 1. **G-LOG-1:** ✅ An activity log records every acting tool call: time, agent, what was done, where, and whether it was Auto or approved by me.
-2. **G-BUDGET-1:** Each task and each team has a budget (maximum turns and maximum agents working at once). The run stops and reports when the budget is reached.
+2. **G-BUDGET-1:** ✅ Each task and each team has a budget (maximum turns and maximum agents working at once). The run stops and reports when the budget is reached.
 3. **G-BUDGET-2:** ✅ A global switch pauses all automation, so chatting stays available when my subscription limit is nearly used.
 
 **Instruction packs**
@@ -357,8 +357,8 @@ Build in three phases, each usable on its own. Phase 1 is Milestones 1 to 4 (the
 
 **Milestone 7: Teams**
 
-- [ ] A three-role test team (lead, worker, reviewer) finishes a small task, with the board showing each member's status.
-- [ ] I can pause, stop and redirect the team mid-task.
+- [x] A three-role test team (lead, worker, reviewer) finishes a small task, with the board showing each member's status.
+- [x] I can pause, stop and redirect the team mid-task.
 
 **Milestone 8: Scheduler and pack format**
 

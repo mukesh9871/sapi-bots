@@ -1,4 +1,4 @@
-"""Local hub server: serves the chat window and streams replies (Milestones 2 to 6).
+"""Local hub server: serves the chat window and streams replies (Milestones 2 to 7).
 
 Run:  .venv\\Scripts\\python -m hub.server        (opens your browser)
 
@@ -41,6 +41,10 @@ from hub.engine.roles import MODELS, Role, RoleError, RoleStore, catalog
 from hub.connectors.base import ActionError
 from hub.gate.gate import Gate, RepeatRun
 from hub.gate.store import GateStore
+from hub.engine import roles as roles_mod
+from hub.engine.orchestrator import TeamRun, new_run
+from hub.engine.runs import RunStore
+from hub.engine.teams import TeamError, TeamStore
 
 WEB_DIR = Path(__file__).parent / "web"
 COOKIE = "hub_token"
@@ -78,6 +82,7 @@ class HubState:
     # G-BUDGET-2: held in memory and written through to config.json. Never re-read from the file
     # per call: a failed read (file busy while it is saved) would fall back to "not paused" (review M6).
     paused: bool = False
+    runs: dict = field(default_factory=dict)  # Milestone 7: team runs in progress, by run id
 
 
 class RoleUnavailable(Exception):
@@ -120,7 +125,8 @@ def validate_settings(body: dict[str, Any], current: dict[str, Any]) -> str | No
 def create_app(token: str, port: int, *, login: LoginState | None = None,
                notices: list[str] | None = None, check_login_on_start: bool = True,
                history: HistoryStore | None = None, roles: RoleStore | None = None,
-               gate_store: GateStore | None = None) -> FastAPI:
+               gate_store: GateStore | None = None, team_store: TeamStore | None = None,
+               run_store: RunStore | None = None) -> FastAPI:
     state = HubState(token=token, port=port, login=login or LoginState(None), notices=notices or [],
                      history=history or HistoryStore(), roles=roles or RoleStore())
     # G-BUDGET-2: the pause switch is read on every acting call, so it applies at once.
@@ -137,6 +143,13 @@ def create_app(token: str, port: int, *, login: LoginState | None = None,
     store = state.history
     role_store = state.roles
     role_store.in_use = lambda: {c["role"] for c in store.list_chats() if c["role"]}  # review M5
+    # Milestone 7: team templates read roles from the same store; runs share hub.db with the gate.
+    teams = team_store or TeamStore()
+    teams.roles_get = role_store.get
+    run_store = run_store or RunStore(gate.store.path)
+    left = run_store.stop_unfinished()  # a restart never resumes a team by itself
+    if left:
+        state.notices.append(f"{left} team run(s) were stopped by the restart. Their work so far is on the Teams board.")
     allowed_hosts = {f"127.0.0.1:{port}", f"localhost:{port}"}
     allowed_origins = {f"http://{h}" for h in allowed_hosts}
 
@@ -155,6 +168,12 @@ def create_app(token: str, port: int, *, login: LoginState | None = None,
         yield
         if login_task:
             login_task.cancel()
+        live = list(state.runs.values())
+        for run in live:  # the app is closing: stop team runs cleanly
+            await run.stop("the app was closed")
+        tasks = [r.run_task for r in live if r.run_task]
+        if tasks:  # let each run close its member sessions, so no claude.exe is left behind
+            await asyncio.wait(tasks, timeout=15)
         await detach_session()
 
     app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
@@ -246,6 +265,8 @@ def create_app(token: str, port: int, *, login: LoginState | None = None,
             state.paused = body["automation_paused"]  # takes effect at once, even if the save below fails
             if state.paused:
                 await stop_role_turn()  # G-BUDGET-2: pausing also stops a running role task
+            for run in list(state.runs.values()):  # and pauses or resumes every team run
+                await (run.pause("global") if state.paused else run.resume("global"))
         try:
             # The file always gets the pause state the app is really in. Otherwise saving the theme
             # after a start-up from a broken file would write "not paused" (review M6).
@@ -575,9 +596,16 @@ def create_app(token: str, port: int, *, login: LoginState | None = None,
             return _bad("confirmation missing")
         if state.busy:
             return _bad("a reply is still streaming", 409)
+        if state.runs:  # a running team still needs its transcripts
+            closing = all(r.stopped or r.finished for r in state.runs.values())
+            return _bad("a team run is still closing: try again in a moment" if closing
+                        else "a team is still running: stop it first", 409)
         async with exclusive():
             await detach_session()
-            ids = store.delete_all() + all_transcript_ids()  # also old transcripts no chat refers to
+            if state.runs:  # a team started while the chat process was closing (review M7-5 L2)
+                return _bad("a team is still running: stop it first", 409)
+            # Team runs go too: their steps and outputs are history (their project folders stay).
+            ids =store.delete_all() + run_store.delete_all() + all_transcript_ids()
         return {"ok": True, **await forget_sessions(ids)}
 
     # ---- roles (Milestone 5, G-AGENT-1, G-AGENT-2) --------------------------------------
@@ -685,6 +713,135 @@ def create_app(token: str, port: int, *, login: LoginState | None = None,
             return {"rule": gate.store.set_rule(*key, body.get("mode"), body.get("daily_cap"))}
         except ValueError as exc:
             return _bad(str(exc))
+
+    # ---- teams (Milestone 7, G-TEAM-1..6) ---------------------------------------------------
+    def team_fields(body: dict[str, Any]) -> tuple:
+        return (body.get("name", ""), body.get("lead", ""), body.get("reviewer", ""), body.get("members", []),
+                body.get("max_agents", 2), body.get("max_turns", 100), body.get("notes", ""))
+
+    @app.get("/api/teams")
+    async def list_teams() -> dict[str, Any]:
+        return {"teams": [t.to_dict() for t in teams.list()]}
+
+    @app.post("/api/teams")
+    async def create_team(request: Request):  # G-TEAM-2: saved as a template
+        body = await read_json(request)
+        if body is None:
+            return _bad("bad request")
+        try:
+            return {"team": teams.save(None, *team_fields(body)).to_dict()}
+        except TeamError as exc:
+            return _bad(str(exc))
+
+    @app.put("/api/teams/{team_id}")
+    async def update_team(team_id: str, request: Request):
+        body = await read_json(request)
+        if body is None:
+            return _bad("bad request")
+        try:
+            return {"team": teams.save(team_id, *team_fields(body)).to_dict()}
+        except TeamError as exc:
+            return _bad(str(exc), 404 if "no longer exists" in str(exc) else 400)
+
+    @app.delete("/api/teams/{team_id}")
+    async def delete_team(team_id: str):
+        return {"ok": True} if teams.delete(team_id) else _bad("team not found", 404)
+
+    @app.post("/api/teams/{team_id}/runs")
+    async def start_run(team_id: str, request: Request):  # give the team a task
+        body = await read_json(request) or {}
+        task = body.get("task")
+        if not isinstance(task, str) or not 0 < len(task.strip()) <= 20_000:
+            return _bad("write a task (up to 20000 characters)")
+        team = teams.get(team_id)
+        if team is None:
+            return _bad("team not found", 404)
+        if team.problem:
+            return _bad(f"this team cannot start: {team.problem}")
+        if state.paused:
+            return _bad("automation is paused: resume it to start a team", 409)
+        roles = {rid: role_store.get(rid) for rid in {team.lead, team.reviewer, *team.members} if rid}
+        run = new_run(team, roles, task.strip(), run_store, gate,
+                      # A blank role model uses the Settings model, as in role chats (R-AUTH-10).
+                      lambda **kw: ChatSession(ctrl_c_shield=False, model=config.load()["model"] or None, **kw),
+                      roles_mod.ROLE_WORK_ROOT)
+        state.runs[run.run_id] = run
+        handle = run.run_task = asyncio.create_task(run.run())  # kept: a strong reference, awaited at shutdown
+        handle.add_done_callback(lambda _t, rid=run.run_id: state.runs.pop(rid, None))
+        return {"run_id": run.run_id}
+
+    @app.get("/api/runs")
+    async def list_runs() -> dict[str, Any]:
+        return {"runs": run_store.runs()}
+
+    @app.get("/api/runs/{run_id}")
+    async def get_run(run_id: int):  # G-TEAM-4: the board
+        rec = run_store.run(run_id)
+        if rec is None:
+            return _bad("run not found", 404)
+        steps = run_store.steps(run_id)
+        live = state.runs.get(run_id)
+        if live:
+            board = live.board()
+        else:  # finished or stopped: rebuild the columns from the saved steps
+            final = "done" if rec["status"] == "done" else "stopped"
+            board = {"status": rec["status"], "members": []}
+            for m in rec["members"]:
+                mine = [s for s in steps if s["member"] == m["key"]]
+                if m["key"] == "lead":  # the lead has no steps: show its report
+                    step, output = "leading the team", rec["report"] or ""
+                else:
+                    step = mine[-1]["instructions"][:1000] if mine else ""
+                    output = mine[-1]["output"][-4000:] if mine else ""
+                board["members"].append({"key": m["key"], "role": m["role_id"], "name": m["name"], "status": final,
+                                         "step": step, "output": output[-4000:]})
+        rec.pop("session_ids", None)
+        return {"run": rec, "board": board, "steps": steps, "events": run_store.events(run_id),
+                "questions": run_store.questions(run_id, open_only=True),
+                "closing": bool(live and (live.stopped or live.finished))}  # ended, sessions still closing
+
+    def live_run(run_id: int) -> TeamRun | None:
+        return state.runs.get(run_id)
+
+    @app.post("/api/runs/{run_id}/{action}")
+    async def control_run(run_id: int, action: str, request: Request):  # G-TEAM-5
+        run = live_run(run_id)
+        if run is None:
+            return _bad("this run is not running", 409 if run_store.run(run_id) else 404)
+        body = await read_json(request) or {}
+        if action == "pause":
+            await run.pause("team")
+        elif action == "resume":
+            if state.paused:
+                return _bad("all automation is paused: resume it at the bottom of the window first", 409)
+            await run.resume("team")
+        elif action == "stop":
+            await run.stop("stopped by you")
+        elif action == "message":
+            text = body.get("text")
+            if not isinstance(text, str) or not 0 < len(text.strip()) <= 4000:
+                return _bad("write a message (up to 4000 characters)")
+            run.message(text.strip())
+        elif action == "answer":
+            qid, text = body.get("question_id"), body.get("text")
+            if not isinstance(qid, int) or not isinstance(text, str) or not text.strip():
+                return _bad("write an answer")
+            if not run.answer(qid, text.strip()[:4000]):
+                return _bad("this question was already answered", 409)
+        else:
+            return _bad("unknown action", 404)
+        return {"ok": True, "status": run.status()}
+
+    @app.delete("/api/runs/{run_id}")
+    async def delete_run(run_id: int):  # keeps the folder (its work), removes records and transcripts
+        run = live_run(run_id)
+        if run:  # an ended run closes its sessions for a few seconds first (review M7-7 L2)
+            ended = run.stopped or run.finished
+            return _bad("the run is still closing: try again in a moment" if ended else "stop the run first", 409)
+        ids = run_store.delete_run(run_id)
+        if ids is None:
+            return _bad("run not found", 404)
+        return {"ok": True, **await forget_sessions(ids)}
 
     return app
 
