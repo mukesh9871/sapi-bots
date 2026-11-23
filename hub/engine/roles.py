@@ -68,7 +68,7 @@ def catalog() -> dict[str, dict[str, str]]:
     "demo.post_note" (kind "acting": every call goes through the approval gate)."""
     from hub import connectors  # here, so the role files can be read without loading connectors
     acts = {a.id: {"kind": "acting" if a.acting else "read-only", "label": a.description}
-            for a in connectors.actions().values()}
+            for a in connectors.actions().values() if not a.ui_only}  # buttons for me are never a role's tool
     return {**TOOL_CATALOG, **acts}
 
 

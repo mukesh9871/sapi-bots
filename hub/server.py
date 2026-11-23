@@ -1108,6 +1108,41 @@ def create_app(token: str, port: int, *, login: LoginState | None = None,
                         return _bad(f"it clashes with an action of another pack or of the app: {', '.join(clash)}", 409)
                 pack_store.set_enabled(pack_id, body["enabled"])
                 return {"ok": True}
+            if action == "row":  # Milestone 11: my button on a table row (for example "Mark submitted")
+                body = await read_json(request) or {}
+                pk = pack_store.get(pack_id)
+                if pk is None or pack_id not in pack_store.enabled_dirs():
+                    return _bad("this pack is not installed or is switched off", 404)
+                act = connectors.get(body.get("action")) if body.get("action") in {
+                    a["action"] for a in pk.row_actions} else None
+                # Never an outside action, and only an action marked ui_only (never offered to a role).
+                if act is None or act.acting or not act.ui_only or len(act.required) != 1:
+                    return _bad("no such row action", 404)
+                try:
+                    result = await asyncio.to_thread(act.run, act.clean({act.required[0]: str(body.get("row", ""))}))
+                except Exception as exc:
+                    return _bad(str(exc), 400)
+                return {"ok": True, "result": str(result)}
+            if action == "view":  # Milestone 11: a read-only table the pack offers (for example a tracker)
+                body = await read_json(request) or {}
+                pk = pack_store.get(pack_id)
+                if pk is None or pack_id not in pack_store.enabled_dirs():
+                    return _bad("this pack is not installed or is switched off", 404)
+                wanted = body.get("action")
+                if wanted not in {v["action"] for v in pk.views}:
+                    return _bad("no such view", 404)
+                view = connectors.get(wanted)
+                if view is None or view.acting:  # a view only ever reads
+                    return _bad("this view cannot be shown", 404)
+                try:
+                    table = await asyncio.to_thread(view.run, view.clean({}))
+                    table = json.loads(table) if isinstance(table, str) else table
+                    columns = [str(c) for c in table["columns"]]
+                    total = len(table["rows"])
+                    rows = [[str(c) for c in row] for row in table["rows"]][:2000]
+                except Exception as exc:
+                    return _bad(f"the view failed ({type(exc).__name__}: {exc})", 502)
+                return {"columns": columns, "rows": rows, "total": total}
             if action == "settings":  # Milestone 9: only I fill in a pack's settings
                 body = await read_json(request) or {}
                 return {"settings": pack_store.set_settings(pack_id, body.get("values"))}

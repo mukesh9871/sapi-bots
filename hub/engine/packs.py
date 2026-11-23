@@ -2,14 +2,17 @@
 
 A pack is a folder in packs/<id>/ that bundles one type of work:
 
-    packs/<id>/pack.md          header: name, version, description; the body says what it does
+    packs/<id>/pack.md          header: name, version, description, views and row_actions
+                                ("<action id> | <label>, ...": read-only tables on the Packs page, and my
+                                buttons per table row; a row action is never offered to a role)
     packs/<id>/roles/*.md       roles (same format as my own roles)
     packs/<id>/teams/*.md       team templates (a plain role id means this pack's role)
     packs/<id>/connectors/*.py  connectors (modules that list ACTIONS, as in hub/connectors/)
     packs/<id>/rules.md         suggested approval rules, one per line: "<action id>: ask|never|auto [cap N]"
     packs/<id>/schedules/*.md   default schedules (header: name, run, when, notify; the body is the task)
     packs/<id>/settings.md      settings I fill in on the Packs page, one per line:
-                                "<key> | folder|text|longtext|secret | <label>"
+                                "<key> | folder|file|text|longtext|secret | <label>"
+                                (file: a local .md or .txt file, for example a master resume)
                                 A secret (a platform login) is kept in Windows Credential Manager through
                                 keyring: never in hub.db, a file, a log or an agent's context (hard rule).
 
@@ -40,7 +43,8 @@ from hub.scheduler.schedules import ScheduleError, ScheduleStore, parse_when
 PACKS_DIR = PROJECT_ROOT / "packs"
 RESERVED = {LOCAL}  # packs/local holds my own roles and teams, it is not a pack
 SETTING_RE = re.compile(r"[a-z][a-z0-9_]{0,39}")
-SETTING_TYPES = ("folder", "text", "longtext", "secret")
+SETTING_TYPES = ("folder", "file", "text", "longtext", "secret")
+FILE_TYPES = (".md", ".txt")  # a "file" setting: text a connector may read (Milestone 11)
 MAX_SETTING, MAX_LONG_SETTING = 400, 4000
 MAX_SECRET = 1200  # a LinkedIn token is about 500 characters; Windows Vault holds about 1280 (review M10)
 SECRET_NAMES = "__secret_names"  # in hub.db: only the NAMES of secrets that were set, never their values
@@ -59,6 +63,15 @@ def _remote_drive(folder: Path) -> bool:
 def setting(pack_id: str, key: str) -> str:
     """A pack setting I filled in on the Packs page ("" if not set). Pack connectors call this."""
     return (active.settings(pack_id).get(key, "") if active else "") or ""
+
+
+def data_dir(pack_id: str) -> Path:
+    """A pack's own data folder, next to hub.db (data/pack-data/<pack>/): for example a tracker database.
+    Never inside the pack's folder, which the app never changes (G-PACK-2)."""
+    base = active.db_path.parent if active else PROJECT_ROOT / "data"
+    folder = base / "pack-data" / pack_id
+    folder.mkdir(parents=True, exist_ok=True)
+    return folder
 
 
 def secret(pack_id: str, key: str) -> str:
@@ -111,13 +124,16 @@ class Pack:
     rules: list[dict[str, Any]] = field(default_factory=list)  # {"action", "mode", "cap"}
     schedules: list[dict[str, Any]] = field(default_factory=list)  # {"key", "name", "kind", "target", "spec", "task"}
     settings: list[dict[str, str]] = field(default_factory=list)  # {"key", "type", "label"} (Milestone 9)
+    views: list[dict[str, str]] = field(default_factory=list)  # {"action", "label"}: tables on the Packs page (M11)
+    row_actions: list[dict[str, str]] = field(default_factory=list)  # {"action", "label"}: my buttons per table row
     problem: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {"id": self.id, "name": self.name, "version": self.version, "description": self.description,
                 "readme": self.readme, "roles": self.roles, "teams": self.teams, "connectors": self.connectors,
                 "rules": self.rules, "schedules": [{k: v for k, v in s.items() if k != "task"} for s in self.schedules],
-                "settings": self.settings, "problem": self.problem}
+                "settings": self.settings, "views": self.views, "row_actions": self.row_actions,
+                "problem": self.problem}
 
 
 def read_pack(pack_id: str, path: Path) -> Pack:
@@ -130,6 +146,13 @@ def read_pack(pack_id: str, path: Path) -> Pack:
         return pack
     pack.name, pack.version = head.get("name", "") or pack_id, head.get("version", "")
     pack.description, pack.readme = head.get("description", ""), body[:20_000]
+    # Milestone 11: "views: <action id> | <label>, ..." are read-only tables shown on the Packs page.
+    for item in (v.strip() for v in head.get("views", "").split(",") if v.strip()):
+        action, _, label = (x.strip() for x in item.partition("|"))
+        pack.views.append({"action": action, "label": label or action})
+    for item in (v.strip() for v in head.get("row_actions", "").split(",") if v.strip()):
+        action, _, label = (x.strip() for x in item.partition("|"))
+        pack.row_actions.append({"action": action, "label": label or action})
     stems = lambda sub, ext: sorted(p.stem for p in (path / sub).glob(f"*{ext}") if ID_RE.fullmatch(p.stem)) \
         if (path / sub).is_dir() else []
     pack.roles, pack.teams = stems("roles", ".md"), stems("teams", ".md")
@@ -324,6 +347,14 @@ class PackStore:
                 secrets_to_write[key] = value
                 out.pop(key, None)  # never stored in hub.db
                 continue
+            if spec["type"] == "file" and value:
+                file = Path(value)
+                # The same local-only rules as a folder (no shares, mapped drives or links), then a text file.
+                if not file.is_absolute() or str(file).startswith("\\\\") or _remote_drive(file) \
+                        or any(os.path.islink(p) for p in (file, *file.parents)) or not file.is_file() \
+                        or file.suffix.lower() not in FILE_TYPES:
+                    raise PackError(f"{spec['label']}: give the full path of a .md or .txt file on this PC")
+                value = str(file.resolve())
             if spec["type"] == "folder" and value:
                 folder = Path(value)
                 # Checked before is_dir(): never touch a network share, also not written as //host/share

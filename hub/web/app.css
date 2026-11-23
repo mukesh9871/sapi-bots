@@ -203,3 +203,9 @@ label.check { display: flex; gap: 6px; align-items: center; }
 
 /* Milestone 10: the exact text a connector will publish, line breaks kept */
 .exact { white-space: pre-wrap; border-left: 3px solid var(--border); padding: 4px 8px; margin: 6px 0; font-size: 13px; }
+
+/* Milestone 11: a pack's table (for example the job tracker) */
+.table-wrap { max-height: 60vh; overflow: auto; }
+#view-table { border-collapse: collapse; font-size: 13px; width: 100%; }
+#view-table th, #view-table td { border-bottom: 1px solid var(--border); padding: 4px 8px; text-align: left; vertical-align: top; }
+#view-table th { position: sticky; top: 0; background: var(--bg, #fff); }

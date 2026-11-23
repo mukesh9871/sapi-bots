@@ -21,7 +21,8 @@ boxes and ✅ marks there show what is built and tested.
 | | 8. Scheduler and pack format | Ready to test |
 | 3. Instruction packs | 9. Routine automation | Ready to test (the week-long check is yours) |
 | | 10. Social media manager | Ready to test (a real LinkedIn post needs your account) |
-| | 11 to 13. Jobs, software team, video | Not started |
+| | 11. Job applications | Ready to test (your ten reviews before any Auto are still to do) |
+| | 12 to 13. Software team, video | Not started |
 
 ## What it does today
 
@@ -142,6 +143,35 @@ boxes and ✅ marks there show what is built and tested.
   - **LinkedIn set-up:** your member URN (`urn:li:person:...`) and an access token with
     `w_member_social` from your LinkedIn developer app. The token goes straight into
     Windows Credential Manager: the Packs page only shows "set", and **Forget** removes it.
+- **Job applications pack** (install it on the Packs page): a job scout, a resume writer,
+  a fact checker, an application filler and a job lead (plus an "Application team" with
+  the fact checker as its reviewer). Open the **Tracker** from the Packs page.
+  - **Profile** in Settings: your master resume (a .md or .txt file), skills, target titles,
+    locations, salary range, companies to exclude and the sources to search.
+  - **The writer never invents:** it may only use your profile and resume, and the fact
+    checker compares every claim with them. Nothing moves on without a pass.
+  - **Mode per site** (`site: auto`, `site: prepare`, `site: skip`, one per line). Unknown
+    sites are Prepare only, and LinkedIn always is (it bans bots).
+  - **Prepare only** (the default): the job waits as "ready for you", with the tailored
+    resume and letter in `data/pack-data/jobs/documents/`. You submit it.
+  - **Auto** is only for jobs that take applications by email. The bot emails your letter
+    and resume from your mailbox (server settings below; the password is kept in Windows
+    Credential Manager). Every email goes through Approvals, starting as Ask, and shows
+    exactly what will be sent. Review ten prepared applications before setting any site to
+    Auto.
+  - The bot never fills in web forms and never tries to get past a CAPTCHA. At a CAPTCHA,
+    a login check, a legal declaration or a question your profile cannot answer, the job
+    shows as "needs you" in the tracker. No job is added or applied to twice.
+  - **Tracker buttons:** **Mark submitted** records a job you submitted yourself (applied
+    date and a follow-up in a week). **Reopen** returns a job you dealt with after a
+    hand-over, or an interrupted email that did not go out, so it can go on.
+  - Every email approval carries a fingerprint of the exact documents: if they change
+    after it was asked for, it is not sent. The approval shows the letter and the full
+    resume.
+  - Schedules (installed switched off): the daily scout (07:00) and the daily application
+    round (09:00).
+- **Pack tables:** a pack can show read-only tables on the Packs page (the Tracker is
+  the first).
 - **Tell me when done:** a schedule with this ticked shows its result in the window
   (and as a desktop notice, if you allow it) when it finishes. Good for reminders.
 - **Terminal chat** for quick use without the window.
@@ -234,6 +264,7 @@ Everything stays on your PC. None of these are committed to git.
 | Schedules and their runs | `data/hub.db` (SQLite) |
 | Platform logins (for example the LinkedIn token) | Windows Credential Manager, under `sapi-ai-hub` (never in a file) |
 | Social demo channel output | `data/outbox/social-demo.md` |
+| A pack's own data (for example the job tracker and the tailored documents) | `data/pack-data/<pack>/` |
 | Each team run's working folder (its files and `REPORT.md`) | `projects/team-<run>/` |
 | Approval rules, inbox, activity log, team runs (steps, log, questions) | `data/hub.db` (SQLite; the activity log is append-only) |
 | Demo connector output | `data/outbox/notes.md` and `data/outbox/sample-notes.md` (sample pack) |
@@ -287,13 +318,16 @@ continuable) and its folder.
 **A pack** is a folder `packs/<id>/`:
 
 ```
-packs/<id>/pack.md          header: name, version, description; below it, what the pack does
+packs/<id>/pack.md          header: name, version, description, views and row_actions
+                            ("<action id> | <label>, ...": read-only tables on the Packs page, and
+                            your buttons per row: their actions must be marked ui_only, so they are
+                            never offered to a role); below it, what the pack does
 packs/<id>/roles/*.md       roles (same format as your own)
 packs/<id>/teams/*.md       teams (a plain role id means this pack's role)
 packs/<id>/connectors/*.py  connectors (modules that list ACTIONS, like hub/connectors/)
 packs/<id>/rules.md         suggested rules, one per line: "<action id>: ask|never|auto [cap N]"
 packs/<id>/settings.md      settings you fill in on the Packs page:
-                            "<key> | folder|text|longtext|secret | <label>" (a secret goes to
+                            "<key> | folder|file|text|longtext|secret | <label>" (a secret goes to
                             Windows Credential Manager, never to a file)
 packs/<id>/schedules/*.md   schedules: header "name", "run: role <id>" or "run: team <id>",
                             "notify: yes" (tell me when done),
@@ -402,6 +436,7 @@ docs/REQUIREMENTS.md full specification and milestones
 packs/sample/         sample pack (Milestone 8)
 packs/routines/       routine automation pack (Milestone 9)
 packs/social/         social media manager pack (Milestone 10)
+packs/jobs/           job applications pack (Milestone 11)
 start.bat            starts the chat window
 ```
 
@@ -426,7 +461,7 @@ In PowerShell, use `$env:HUB_LIVE='1'` instead of `set HUB_LIVE=1`.
 - Offline tests use a temporary database and a fake Claude session. They never touch
   your real `data/chats.db`.
 - Live tests use your subscription (a few short messages, mostly on Haiku).
-- Current result: 476 passed (444 offline, 32 live).
+- Current result: 501 passed (467 offline, 34 live).
 
 ## Working rules for development
 

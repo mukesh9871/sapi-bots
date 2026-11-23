@@ -34,6 +34,8 @@ class Action:
     # Optional: a rule the content must meet (for example "never post about these topics"). The gate runs
     # it before deciding, so content that can never be published is refused, not held for approval.
     check: Callable[[dict[str, Any]], None] | None = None
+    # Only for me, from a button on the Packs page (a pack's row action): never offered to a role (review M11).
+    ui_only: bool = False
 
     @property
     def id(self) -> str:
@@ -62,12 +64,16 @@ class Action:
         out = {}
         for key, spec in self.fields.items():
             value = payload.get(key, "")
+            if spec.get("number") and isinstance(value, int) and not isinstance(value, bool):
+                value = str(value)  # a field marked "number" (a job number, a score) may come as a number
             if not isinstance(value, str):
                 raise ActionError(f"{key} must be text")
             if key in self.required and not value.strip():
                 raise ActionError(f"{key} is required")
             if len(value) > spec.get("max", 10_000):
                 raise ActionError(f"{key} is too long")
+            if spec.get("number") and value.strip().isascii() and value.strip().isdigit():
+                value = str(int(value))  # "01" and "1" are the same request (the repeat check, review M11)
             out[key] = value.strip()  # "Video " and "Video" are the same request (the repeat check, review M10)
         return out
 

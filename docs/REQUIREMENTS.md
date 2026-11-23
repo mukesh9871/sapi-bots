@@ -144,13 +144,13 @@ Each pack adds roles, connectors and default rules on top of the generic platfor
 
 Roles: job scout, resume writer, application filler, tracker.
 
-1. **P-JOB-1:** A profile holds my master resume, skills, target titles, locations, salary range, and companies to exclude.
-2. **P-JOB-2:** The scout searches the sources I choose each day, scores each job against my profile, and shortlists the matches.
-3. **P-JOB-3:** The writer tailors my resume and cover letter to each job. It never invents experience, skills or qualifications.
-4. **P-JOB-4:** Submission is fully automatic where the site allows it (for example applications by email or through a site's own apply API). Where a site forbids automation, the bot prepares everything and I submit. LinkedIn is in this group: it bans bots and automated activity ([source](https://www.linkedin.com/help/linkedin/answer/a1341387)).
-5. **P-JOB-5:** A per-site list records which mode applies: Auto, Prepare only, or Skip. Unknown sites start as Prepare only.
-6. **P-JOB-6:** The bot stops and hands over to me at any CAPTCHA, login check, legal declaration, or question it cannot answer from my profile. It never tries to get around a CAPTCHA.
-7. **P-JOB-7:** A tracker lists every job with status, date applied, documents sent and follow-up date. No job is applied to twice.
+1. **P-JOB-1:** ✅ A profile holds my master resume, skills, target titles, locations, salary range, and companies to exclude.
+2. **P-JOB-2:** ✅ The scout searches the sources I choose each day, scores each job against my profile, and shortlists the matches.
+3. **P-JOB-3:** ✅ The writer tailors my resume and cover letter to each job. It never invents experience, skills or qualifications.
+4. **P-JOB-4:** ✅ (Version 1: applications by email; no site apply APIs yet.) Submission is fully automatic where the site allows it (for example applications by email or through a site's own apply API). Where a site forbids automation, the bot prepares everything and I submit. LinkedIn is in this group: it bans bots and automated activity ([source](https://www.linkedin.com/help/linkedin/answer/a1341387)).
+5. **P-JOB-5:** ✅ A per-site list records which mode applies: Auto, Prepare only, or Skip. Unknown sites start as Prepare only.
+6. **P-JOB-6:** ✅ The bot stops and hands over to me at any CAPTCHA, login check, legal declaration, or question it cannot answer from my profile. It never tries to get around a CAPTCHA.
+7. **P-JOB-7:** ✅ A tracker lists every job with status, date applied, documents sent and follow-up date. No job is applied to twice.
 
 ### Pack 2: Social media manager
 
@@ -377,8 +377,8 @@ Build in three phases, each usable on its own. Phase 1 is Milestones 1 to 4 (the
 
 **Milestone 11: Job applications pack**
 
-- [ ] Ten prepared applications reviewed by me with no invented facts, before any site is set to Auto.
-- [ ] The tracker shows every application, and the bot hands over at a CAPTCHA.
+- [ ] Ten prepared applications reviewed by me with no invented facts, before any site is set to Auto. (Built and tested: the fact check gate, Prepare only by default, email only through Approvals, and a live fact check that caught an invented degree. The ten reviews are yours to do.)
+- [x] The tracker shows every application, and the bot hands over at a CAPTCHA.
 
 **Milestone 12: Software team pack**
 

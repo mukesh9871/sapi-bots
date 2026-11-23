@@ -1462,6 +1462,7 @@ async function loadPacks() {
     readme.append(sum, body);
     const menu = document.createElement("menu");
     const btn = (label, cls, fn) => { const b = document.createElement("button"); b.type = "button"; b.className = cls; b.textContent = label; b.onclick = fn; menu.append(b); };
+    if (pk.installed && pk.enabled) for (const v of pk.views || []) btn(`Open ${v.label}`, "ghost", () => openView(pk, v));
     if (!pk.installed) btn("Install", "", () => packAction(pk, "install"));
     else {
       btn(pk.enabled ? "Switch off" : "Switch on", "ghost", () => packAction(pk, "enable", { enabled: !pk.enabled }));
@@ -1491,6 +1492,7 @@ async function loadPacks() {
           l.append(inp, forget); inputs[st.key] = inp; inp.dataset.secret = "1"; fs.append(l); continue;
         } else { inp = document.createElement("input"); inp.maxLength = 400; inp.value = current; }
         if (st.type === "folder") inp.placeholder = "C:\\Users\\me\\Downloads";
+        if (st.type === "file") inp.placeholder = "C:\\Users\\me\\Documents\\resume.md";
         inputs[st.key] = inp; l.append(inp); fs.append(l);
       }
       const save = document.createElement("button"); save.type = "button"; save.className = "ghost"; save.textContent = "Save settings";
@@ -1518,6 +1520,43 @@ async function packAction(pk, action, body) {
   await loadPacks();
   loadRoles().catch(() => {}); // pack roles appear or disappear in Talk to
 }
+
+// Milestone 11: a pack's read-only table (for example the job tracker), shown as plain text cells
+let currentView = null;
+async function openView(pk, v) {
+  currentView = { pk, v };
+  $("view-title").textContent = `${pk.name}: ${v.label}`;
+  try {
+    const t = await api("POST", `/api/packs/${encodeURIComponent(pk.id)}/view`, { action: v.action });
+    const head = document.createElement("tr");
+    head.append(...t.columns.map((c) => { const th = document.createElement("th"); th.textContent = c; return th; }));
+    const rowActions = pk.row_actions || [];
+    if (rowActions.length) { const th = document.createElement("th"); head.append(th); }
+    $("view-table").replaceChildren(head, ...t.rows.map((r) => {
+      const tr = document.createElement("tr");
+      tr.append(...r.map((c) => { const td = document.createElement("td"); td.textContent = c; return td; }));
+      if (rowActions.length) { // my buttons for this row (the first cell is its number)
+        const td = document.createElement("td");
+        for (const a of rowActions) {
+          const b = document.createElement("button"); b.type = "button"; b.className = "ghost"; b.textContent = a.label;
+          b.onclick = async () => {
+            try { const res = await api("POST", `/api/packs/${encodeURIComponent(pk.id)}/row`, { action: a.action, row: r[0] }); flash(res.result); }
+            catch (err) { flash(`${err.message}.`, true); }
+            openView(pk, v);
+          };
+          td.append(b);
+        }
+        tr.append(td);
+      }
+      return tr;
+    }));
+    $("view-empty").hidden = t.rows.length > 0;
+    $("view-title").textContent = `${pk.name}: ${v.label}` + (t.total > t.rows.length ? ` (showing ${t.rows.length} of ${t.total}, newest first)` : "");
+  } catch (err) { flash(`Could not open it: ${err.message}.`, true); return; }
+  if (!$("view-dialog").open) $("view-dialog").showModal();
+}
+$("view-refresh").onclick = () => currentView && openView(currentView.pk, currentView.v);
+$("view-close").onclick = () => $("view-dialog").close();
 
 $("open-packs").onclick = async () => {
   try { await loadPacks(); } catch (err) { flash(`Could not load packs: ${err.message}.`, true); return; }
