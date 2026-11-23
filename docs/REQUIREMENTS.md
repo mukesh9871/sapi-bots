@@ -183,10 +183,10 @@ Roles: trend analyst, content writer, publisher, analytics reporter.
 
 Roles: architect, manager, developer 1 and 2, tester 1 and 2, reviewer.
 
-1. **P-DEV-1:** Workflow: the manager plans, the architect designs, developers build in separate branches, testers write and run tests, the reviewer reviews, the manager reports to me.
-2. **P-DEV-2:** The team works inside one project folder under Git, so every change is a commit I can read and undo.
-3. **P-DEV-3:** Commands run only inside the project folder. Pushing to a remote, installing system software, or touching anything outside the folder is Ask.
-4. **P-DEV-4:** No developer approves their own work; a change is done only when tests pass and the reviewer accepts it.
+1. **P-DEV-1:** ✅ Workflow: the manager plans, the architect designs, developers build in separate branches, testers write and run tests, the reviewer reviews, the manager reports to me.
+2. **P-DEV-2:** ✅ The team works inside one project folder under Git, so every change is a commit I can read and undo.
+3. **P-DEV-3:** ✅ Commands run only inside the project folder. Pushing to a remote, installing system software, or touching anything outside the folder is Ask.
+4. **P-DEV-4:** ✅ No developer approves their own work; a change is done only when tests pass and the reviewer accepts it.
 
 ### Pack 5: Video production (ComfyUI on the RTX 5090)
 
@@ -382,7 +382,7 @@ Build in three phases, each usable on its own. Phase 1 is Milestones 1 to 4 (the
 
 **Milestone 12: Software team pack**
 
-- [ ] The full team delivers a small tested program in a Git project folder, within budget.
+- [x] The full team delivers a small tested program in a Git project folder, within budget.
 
 **Milestone 13: Video production pack**
 

@@ -150,7 +150,10 @@ AGENT_CONFIG_NAMES = {"claude.md", "claude.local.md", "agents.md", ".claude", ".
                       ".vscode", ".idea", ".github", ".gitlab-ci.yml", ".circleci"}  # review M5 round 4
 SHELL_LINK_TYPES = (".url", ".lnk", ".library-ms", ".searchconnector-ms", ".scf", ".theme", ".themepack")
 # Files pytest imports and runs on its own (second layer behind pytest.ini, review M5 round 6).
-TEST_RUNNER_NAMES = {"conftest.py", "pytest.ini", "pyproject.toml", "setup.cfg", "tox.ini", "setup.py"}
+TEST_RUNNER_NAMES = {"conftest.py", "pytest.ini", "pyproject.toml", "setup.cfg", "tox.ini", "setup.py",
+                     # review M12-3: modules Python would import in place of the real runner
+                     "pytest.py", "_pytest", "pluggy.py", "pluggy", "iniconfig.py", "sitecustomize.py",
+                     "usercustomize.py"}
 
 
 def _test_runner_file(name: str) -> bool:
@@ -219,6 +222,9 @@ def outside_folder(tool: str, tool_input: dict[str, Any], folder: Path) -> str |
         p = Path(value)
         # Windows drops trailing dots and spaces from a name, so "CLAUDE.md." is CLAUDE.md.
         names = {x.rstrip(". ").lower() for x in re.split(r"[\\/]", value)}
+        if tool in ("Write", "Edit") and any(re.search(r"~\d", n) for n in names):
+            # Review M12: an 8.3 short name (GIT~1) can mean .git on a volume that keeps short names.
+            return f"{value} uses a short file name"
         if tool in ("Write", "Edit") and names & AGENT_CONFIG_NAMES:
             return f"{value} is a settings file for coding agents"  # review M5: no planted CLAUDE.md
         if tool in ("Write", "Edit") and any(n.endswith(SHELL_LINK_TYPES) or n == "desktop.ini" for n in names):
@@ -245,23 +251,25 @@ def outside_folder(tool: str, tool_input: dict[str, Any], folder: Path) -> str |
     return None
 
 
-def _gated_tool(action: Any, gate: Any, agent: str, pack: str = "local") -> Any:
+def _gated_tool(action: Any, gate: Any, agent: str, pack: str = "local", folder: Any = None) -> Any:
     """An in-process tool for one connector action. It never acts by itself: the approval
     gate decides (Auto, Ask, Never, cap, pause), runs and logs it (G-APPR-1, G-LOG-1)."""
     @tool(f"{action.connector}_{action.name}", action.description, action.schema())
     async def handler(args: dict[str, Any]) -> dict[str, Any]:
         # G-PACK-1: a pack role's actions follow that pack's rules ("local" for my own roles).
+        args = action.fill(args, {"folder": str(folder or ""), "agent": agent})  # Milestone 12: hub-filled fields
         result = await asyncio.to_thread(gate.call, action.id, args, agent, pack)  # SQLite + connector: off the loop
         return {"content": [{"type": "text", "text": result.text}], "is_error": result.is_error}
     return handler
 
 
-def _readonly_tool(action: Any) -> Any:
+def _readonly_tool(action: Any, agent: str = "", folder: Any = None) -> Any:
     """An in-process tool for a read-only connector action (G-TOOL-2): it changes nothing outside the
     app, so it needs no approval; its input is still checked. Milestone 9."""
     @tool(f"{action.connector}_{action.name}", action.description, action.schema())
     async def handler(args: dict[str, Any]) -> dict[str, Any]:
         try:
+            args = action.fill(args, {"folder": str(folder or ""), "agent": agent})  # Milestone 12
             result = await asyncio.to_thread(action.run, action.clean(args))
             return {"content": [{"type": "text", "text": str(result)}], "is_error": False}
         except Exception as exc:  # a bad input or a failed read: the agent is told plainly
@@ -304,7 +312,8 @@ def build_options(
             raise ValueError("acting tools need the approval gate")  # never run them ungated
         if acts:
             servers["hub"] = create_sdk_mcp_server("hub", tools=[
-                _gated_tool(a, gate, role.name, role.pack) if a.acting else _readonly_tool(a) for a in acts])
+                _gated_tool(a, gate, role.name, role.pack, folder or role.folder) if a.acting
+                else _readonly_tool(a, role.name, folder or role.folder) for a in acts])
         if team_tools:
             servers["team"] = create_sdk_mcp_server("team", tools=list(team_tools))
         allowed = builtin + [a.tool_name for a in acts] + [f"mcp__team__{t.name}" for t in team_tools]

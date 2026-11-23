@@ -65,6 +65,22 @@ def setting(pack_id: str, key: str) -> str:
     return (active.settings(pack_id).get(key, "") if active else "") or ""
 
 
+def project_folder(value: str) -> Path:
+    """Milestone 12: a working folder given by the hub (a hub-filled field), checked again: it must be an
+    existing folder inside projects/ (a role's or a team's folder), never a link out of it."""
+    from hub.engine import roles
+    if not value:
+        raise ValueError("no working folder")
+    folder = Path(value)
+    root = roles.ROLE_WORK_ROOT.resolve()
+    if not folder.is_absolute() or os.path.islink(folder) or not folder.is_dir():
+        raise ValueError("the working folder is not a folder")
+    resolved = folder.resolve()
+    if resolved == root or root not in resolved.parents:
+        raise ValueError("the working folder must be inside the projects folder")
+    return resolved
+
+
 def data_dir(pack_id: str) -> Path:
     """A pack's own data folder, next to hub.db (data/pack-data/<pack>/): for example a tracker database.
     Never inside the pack's folder, which the app never changes (G-PACK-2)."""

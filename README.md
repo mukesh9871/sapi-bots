@@ -22,7 +22,8 @@ boxes and ✅ marks there show what is built and tested.
 | 3. Instruction packs | 9. Routine automation | Ready to test (the week-long check is yours) |
 | | 10. Social media manager | Ready to test (a real LinkedIn post needs your account) |
 | | 11. Job applications | Ready to test (your ten reviews before any Auto are still to do) |
-| | 12 to 13. Software team, video | Not started |
+| | 12. Software team | Ready to test |
+| | 13. Video production | Not started |
 
 ## What it does today
 
@@ -170,6 +171,18 @@ boxes and ✅ marks there show what is built and tested.
     resume.
   - Schedules (installed switched off): the daily scout (07:00) and the daily application
     round (09:00).
+- **Software team pack** (install it on the Packs page): a manager, an architect, two
+  developers, two testers and a reviewer. Give the **Software team** a task on the Teams page.
+  - It works in the team's project folder under git, so every change is a commit you can
+    read and undo. Developers build in their own branches; commits are signed by role.
+  - The team only gets git actions for its own folder. **Running the tests** runs code the
+    team wrote on your PC with your rights, so it goes through Approvals as Ask (keep it
+    there). The tests run on a throwaway copy of the exact commit. **Pushing** is Ask.
+    Installing software or touching anything outside the folder is not offered.
+  - A branch is merged into main only when its exact latest commit passed its tests and was
+    accepted by a reviewer who did not make that commit.
+  - Test files are named `check_*.py`: the hub never lets an agent write `test_*.py` or
+    `conftest.py`, so the hub's own tests never run agent code.
 - **Pack tables:** a pack can show read-only tables on the Packs page (the Tracker is
   the first).
 - **Tell me when done:** a schedule with this ticked shows its result in the window
@@ -342,6 +355,10 @@ action) is not loaded: the pack installed first keeps it, and the other cannot b
 installed. A pack that does not read cleanly is shown with the problem and
 cannot be installed.
 
+A connector action can mark a field `{"hub": "folder"}` or `{"hub": "agent"}`: the hub fills
+it with the agent's own working folder (inside `projects/`) or role name. The agent never
+sees that field and cannot set it, and an edit at approval cannot change it.
+
 **A team file** looks like this. Members are role ids (comma-separated), and the notes
 below the header go to the lead:
 
@@ -437,6 +454,7 @@ packs/sample/         sample pack (Milestone 8)
 packs/routines/       routine automation pack (Milestone 9)
 packs/social/         social media manager pack (Milestone 10)
 packs/jobs/           job applications pack (Milestone 11)
+packs/devteam/        software team pack (Milestone 12)
 start.bat            starts the chat window
 ```
 

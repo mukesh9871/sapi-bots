@@ -919,6 +919,7 @@ function approvalCard(item) {
     const label = document.createElement("label"); label.textContent = spec.description || key;
     const ta = document.createElement("textarea"); ta.rows = key === "text" ? 5 : 1; ta.value = item.payload[key] || "";
     if (spec.max) ta.maxLength = spec.max;
+    if (spec.hub) ta.readOnly = true; // filled in by the hub (the agent's folder or name): shown, never edited
     label.append(ta); card.append(label); boxes[key] = ta;
     if (ex) ta.addEventListener("input", () => {
       clearTimeout(previewTimer); // one timer for the whole card

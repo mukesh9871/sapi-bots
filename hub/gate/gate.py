@@ -158,6 +158,9 @@ class Gate:
         if rule["mode"] == "never":
             raise ValueError("the rule for this action is now Never: change it in Settings to approve this")
         clean = action.clean(payload if payload is not None else item["payload"])  # raises ActionError
+        for key, spec in action.fields.items():  # a hub-filled field (folder, agent) is never edited (M12)
+            if spec.get("hub"):
+                clean[key] = item["payload"].get(key, "")
         if action.check is not None:  # an edit must meet the content rules too; the item stays pending if not
             try:
                 action.check(clean)
