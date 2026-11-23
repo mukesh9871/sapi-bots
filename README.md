@@ -23,7 +23,7 @@ boxes and ✅ marks there show what is built and tested.
 | | 10. Social media manager | Ready to test (a real LinkedIn post needs your account) |
 | | 11. Job applications | Ready to test (your ten reviews before any Auto are still to do) |
 | | 12. Software team | Ready to test |
-| | 13. Video production | Not started |
+| | 13. Video production | Ready to test (a real render needs ComfyUI and FFmpeg) |
 
 ## What it does today
 
@@ -183,6 +183,24 @@ boxes and ✅ marks there show what is built and tested.
     accepted by a reviewer who did not make that commit.
   - Test files are named `check_*.py`: the hub never lets an agent write `test_*.py` or
     `conftest.py`, so the hub's own tests never run agent code.
+- **Video production pack** (install it on the Packs page): a script writer, a director, a
+  producer and an editor. Give the **Video team** a one-line idea on the Teams page.
+  - It needs ComfyUI running on this PC and FFmpeg. On the Packs page set the ComfyUI
+    address (only a 127.0.0.1 or localhost address is accepted), the folder with your
+    workflow templates and, if FFmpeg is not on PATH, the full path of ffmpeg.exe.
+  - Templates are ComfyUI workflows saved in API format, with `{{prompt}}`, `{{negative}}`,
+    `{{seed}}`, `{{length}}`, `{{width}}`, `{{height}}`, `{{steps}}`, `{{frames}}` or `{{fps}}`
+    where the agents fill in values. The agents never build a new workflow. A template must
+    save a video file (.mp4 or .webm), because images cannot be joined into the cut.
+  - You approve the script first: the approval shows the whole SCRIPT.md, and nothing
+    renders until you do. If the script changes after that, it needs approving again.
+    Each approval stops the run: approve it, then run the team again.
+  - Renders go through Approvals (Ask until you choose Auto), one at a time. A failed
+    render is tried once more, then flagged. Clips are saved under renders/ in the
+    project folder.
+  - The editor joins the clips (with subtitles and music if there are any) into final/,
+    and you approve the final cut. That writes social-draft.md, a draft post for the
+    social media pack.
 - **Pack tables:** a pack can show read-only tables on the Packs page (the Tracker is
   the first).
 - **Tell me when done:** a schedule with this ticked shows its result in the window
@@ -455,6 +473,7 @@ packs/routines/       routine automation pack (Milestone 9)
 packs/social/         social media manager pack (Milestone 10)
 packs/jobs/           job applications pack (Milestone 11)
 packs/devteam/        software team pack (Milestone 12)
+packs/video/          video production pack (Milestone 13)
 start.bat            starts the chat window
 ```
 

@@ -192,12 +192,12 @@ Roles: architect, manager, developer 1 and 2, tester 1 and 2, reviewer.
 
 Roles: script writer, director, producer, editor.
 
-1. **P-VID-1:** Workflow: the writer produces a script and shot list; the director turns each shot into prompts and settings; the producer queues renders and tracks progress; the editor assembles clips, audio and subtitles. I approve the script and the final cut.
-2. **P-VID-2:** Rendering is done by ComfyUI on my laptop through its local API. Claude agents write prompts and manage the queue; the GPU work never leaves my machine.
-3. **P-VID-3:** Agents use workflow templates I have saved in ComfyUI and fill in the parameters (prompt, seed, length, resolution). They do not build new node graphs in version 1.
-4. **P-VID-4:** One render at a time on the GPU. A failed render is retried once, then flagged to me.
-5. **P-VID-5:** Outputs are saved in the project folder. A finished video can be passed to the social media pack as a draft post.
-6. **P-VID-6:** No likeness of a real person and no copyrighted character without my confirmation that I have the rights.
+1. **P-VID-1:** ✅ Workflow: the writer produces a script and shot list; the director turns each shot into prompts and settings; the producer queues renders and tracks progress; the editor assembles clips, audio and subtitles. I approve the script and the final cut.
+2. **P-VID-2:** ✅ Rendering is done by ComfyUI on my laptop through its local API. Claude agents write prompts and manage the queue; the GPU work never leaves my machine.
+3. **P-VID-3:** ✅ Agents use workflow templates I have saved in ComfyUI and fill in the parameters (prompt, seed, length, resolution). They do not build new node graphs in version 1.
+4. **P-VID-4:** ✅ One render at a time on the GPU. A failed render is retried once, then flagged to me.
+5. **P-VID-5:** ✅ Outputs are saved in the project folder. A finished video can be passed to the social media pack as a draft post.
+6. **P-VID-6:** ✅ No likeness of a real person and no copyrighted character without my confirmation that I have the rights.
 
 ## Non-functional requirements
 
@@ -386,6 +386,6 @@ Build in three phases, each usable on its own. Phase 1 is Milestones 1 to 4 (the
 
 **Milestone 13: Video production pack**
 
-- [ ] The team produces a short video from a one-line idea: script approved by me, clips rendered by ComfyUI, final cut assembled.
+- [ ] The team produces a short video from a one-line idea: script approved by me, clips rendered by ComfyUI, final cut assembled. (Built and tested offline against a stand-in ComfyUI and FFmpeg: script approval pinned to its exact text, template-only renders on this PC, one at a time, retry once then flag, the final cut pinned by fingerprint. A real render needs ComfyUI and FFmpeg installed: yours to do.)
 
 **Done means:** each phase is used daily for a week with no lost data, no charge on an Anthropic API account, no action taken outside my approval rules, and no crashes. The order of packs in Phase 3 can change.
