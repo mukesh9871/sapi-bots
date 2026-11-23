@@ -135,6 +135,7 @@ The platform is one general engine: agents with roles, teams, tools, schedules a
 
 1. **G-PACK-1:** ✅ A pack is a folder that bundles roles, a team template, the connectors it needs, default approval rules and default schedules for one type of work.
 2. **G-PACK-2:** ✅ Installing, switching off or removing a pack never changes the engine or other packs.
+3. **G-PACK-3:** ✅ A pack can run plain background code (no Claude) every few seconds, for watching and bookkeeping such as a run queue. Anything it does outside the app goes through the approval gate, it starts nothing new while automation is paused, and a pack whose work is still running cannot be switched off or removed.
 
 ## Instruction packs (specific types)
 
@@ -198,6 +199,18 @@ Roles: script writer, director, producer, editor.
 4. **P-VID-4:** ✅ One render at a time on the GPU. A failed render is retried once, then flagged to me.
 5. **P-VID-5:** ✅ Outputs are saved in the project folder. A finished video can be passed to the social media pack as a draft post.
 6. **P-VID-6:** ✅ No likeness of a real person and no copyrighted character without my confirmation that I have the rights.
+
+### Pack 6: Pipeline manager (my channel repos on this PC)
+
+Role: pipeline manager. The repos generate videos for different channels; each has its own way to start.
+
+1. **P-PIPE-1:** ✅ I set up each channel repo once (folder, command, expected output, GPU or not, parallel limit, optional time limit, retries). Only I can change this; an agent can never write a folder or a command.
+2. **P-PIPE-2:** ✅ A queue per channel. When a run ends, the next item starts by itself. A run is done only when it exits with 0 and leaves a new output file. A failed run is retried once (or as set, optionally with a resume command), then flagged to me, and the queue moves on.
+3. **P-PIPE-3:** ✅ Runs start with no shell. The only part that changes per item is the item itself: safe characters only, never an option, or passed as a file for free text.
+4. **P-PIPE-4:** ✅ Serial or parallel: one GPU run at a time across all channels, a per-channel limit, and a total cap. Pausing automation or a channel stops new starts only.
+5. **P-PIPE-5:** ✅ Every start goes through Approvals (Ask first). The approval shows the exact program, arguments and folder and is pinned to them: a changed set-up is asked again.
+6. **P-PIPE-6:** ✅ Long runs (12 hours or more) are not tied to the hub: closing or restarting it never stops a run, and the result is picked up later. No time limit unless I set one; a run that prints nothing for a while gets a notice, not a stop. I can stop a run and everything it started.
+7. **P-PIPE-7:** ✅ I manage the queue from chat (add, reorder, skip, retry, pause a channel, ask what is running) and from a Queue table on the Packs page.
 
 ## Non-functional requirements
 
@@ -387,5 +400,9 @@ Build in three phases, each usable on its own. Phase 1 is Milestones 1 to 4 (the
 **Milestone 13: Video production pack**
 
 - [ ] The team produces a short video from a one-line idea: script approved by me, clips rendered by ComfyUI, final cut assembled. (Built and tested offline against a stand-in ComfyUI and FFmpeg: script approval pinned to its exact text, template-only renders on this PC, one at a time, retry once then flag, the final cut pinned by fingerprint. A real render needs ComfyUI and FFmpeg installed: yours to do.)
+
+**Milestone 14: Pipeline manager pack**
+
+- [ ] My channel repos render from the queue one after another for a few days, including at least one run of 12 hours or more, with the next item starting by itself. (Built and tested offline with stand-in repos: approvals pinned to the exact command, serial and parallel slots, one GPU run at a time, retry then flag, a run that survives the hub and is picked up later, time limit and quiet notice, stopping a run with everything it started. Setting up your real repos and the multi-day run are yours to do.)
 
 **Done means:** each phase is used daily for a week with no lost data, no charge on an Anthropic API account, no action taken outside my approval rules, and no crashes. The order of packs in Phase 3 can change.

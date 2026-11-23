@@ -911,7 +911,7 @@ function approvalCard(item) {
   let ex = null, previewTimer = 0, previewSeq = 0, previewOk = true;
   if (item.exact) { // G-APPR-2: the exact text the connector will publish, rebuilt as I edit the fields
     ex = document.createElement("div"); ex.className = "exact";
-    ex.textContent = `Will publish exactly: ${item.exact}`;
+    ex.textContent = `${item.exact_label || "Will publish exactly"}: ${item.exact}`;
     card.append(ex);
   }
   const boxes = {};
@@ -930,7 +930,7 @@ function approvalCard(item) {
         try {
           const r = await api("POST", `/api/approvals/${item.id}/preview`, { payload });
           if (seq !== previewSeq) return; // an older answer arriving late
-          ex.textContent = r.problem ? `Cannot be published like this: ${r.problem}` : `Will publish exactly: ${r.exact}`;
+          ex.textContent = r.problem ? `Cannot be done like this: ${r.problem}` : `${item.exact_label || "Will publish exactly"}: ${r.exact}`;
           previewOk = !r.problem;
         } catch {
           if (seq !== previewSeq) return;
@@ -1538,7 +1538,7 @@ async function openView(pk, v) {
       tr.append(...r.map((c) => { const td = document.createElement("td"); td.textContent = c; return td; }));
       if (rowActions.length) { // my buttons for this row (the first cell is its number)
         const td = document.createElement("td");
-        for (const a of rowActions) {
+        for (const a of (r[0] === "" ? [] : rowActions)) { // a row with no number (a heading) gets none
           const b = document.createElement("button"); b.type = "button"; b.className = "ghost"; b.textContent = a.label;
           b.onclick = async () => {
             try { const res = await api("POST", `/api/packs/${encodeURIComponent(pk.id)}/row`, { action: a.action, row: r[0] }); flash(res.result); }

@@ -18,7 +18,7 @@ from typing import Callable
 from hub.connectors.base import Action
 
 _builtin: dict[str, Action] | None = None
-_pack_cache: dict[Path, tuple[float, list[Action]]] = {}  # module file -> (mtime, its actions)
+_pack_cache: dict[Path, tuple[float, list[Action], object]] = {}  # module file -> (mtime, its actions, module)
 problems: dict[str, str] = {}  # pack id -> why one of its connectors was not loaded (shown on the Packs page)
 
 # {pack id: pack folder} for installed and switched-on packs. Set by the server (hub/engine/packs.py).
@@ -59,7 +59,7 @@ def _load_pack_file(pack: str, path: Path) -> list[Action]:
     sys.modules[mod_name] = module
     spec.loader.exec_module(module)
     acts = _module_actions(module, path.stem)
-    _pack_cache[path] = (mtime, acts)
+    _pack_cache[path] = (mtime, acts, module)
     return acts
 
 
@@ -111,3 +111,21 @@ def actions() -> dict[str, Action]:
 
 def get(action_id: str) -> Action | None:
     return actions().get(action_id)
+
+
+def pack_hooks(name: str) -> list[tuple[str, Callable]]:
+    """Milestone 14: module-level functions a switched-on pack's connectors offer, by name ("TICK" for
+    plain code the hub runs every few seconds, "BUSY" for "work is going on"). Only modules that load
+    without a clash count (actions() decides that). Returns [(pack id, function)]."""
+    found = []
+    loaded = {a.run.__module__ for a in actions().values()}  # the modules actions() accepted
+    for pack, root in pack_dirs().items():
+        folder = root / "connectors"
+        for path in sorted(folder.glob("*.py")) if folder.is_dir() else []:
+            cached = _pack_cache.get(path)
+            if path.stem.startswith("_") or not cached or getattr(cached[2], "__name__", "") not in loaded:
+                continue
+            fn = getattr(cached[2], name, None)
+            if callable(fn):
+                found.append((pack, fn))
+    return found

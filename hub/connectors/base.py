@@ -31,6 +31,7 @@ class Action:
     # Optional: the exact text that will be published, when the connector builds it from the fields
     # (Milestone 10, a routine announcement). Shown in the approval so it is exactly what happens (G-APPR-2).
     show: Callable[[dict[str, Any]], str] | None = None
+    show_label: str = "Will publish exactly"  # Milestone 14: "Will run exactly" for a command, not a post
     # Optional: a rule the content must meet (for example "never post about these topics"). The gate runs
     # it before deciding, so content that can never be published is refused, not held for approval.
     check: Callable[[dict[str, Any]], None] | None = None
@@ -95,7 +96,7 @@ class Action:
         lines = [f"{self.platform}: {self.name.replace('_', ' ')}"]
         if self.show is not None:
             try:
-                lines.append(f"Will publish exactly:\n{self.show(payload)}")
+                lines.append(f"{self.show_label}:\n{self.show(payload)}")
             except Exception as exc:  # a field the connector would refuse: say so in the preview
                 lines.append(f"(This cannot be published as it is: {exc})")
         for key in self.fields:

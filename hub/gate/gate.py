@@ -203,6 +203,17 @@ class Gate:
         self.store.log(str(uuid.uuid4()), item["agent"], item["pack"], item["platform"], item["action_id"],
                        item["payload"], "rejected", detail=f"inbox item {item_id}")
 
+    def withdraw(self, item_id: int, reason: str, pack: str) -> bool:
+        """Milestone 14: a pack's own service takes back a request it made that can no longer be approved
+        as shown (its set-up changed). Only a pending item of that pack. Logged; never run."""
+        item = self.store.approval(item_id)
+        if item is None or item["pack"] != pack or not self.store.claim(item_id, "withdrawn"):
+            return False
+        self.store.finish(item_id, "withdrawn", reason)
+        self.store.log(str(uuid.uuid4()), item["agent"], item["pack"], item["platform"], item["action_id"],
+                       item["payload"], "withdrawn", detail=f"inbox item {item_id}: {reason}")
+        return True
+
     def recover(self) -> int:
         """N-REL-3, at start-up: a call that started but never finished (crash) is marked
         "unknown". It is never re-run: I check the outside system myself. Also an inbox item

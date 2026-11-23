@@ -24,6 +24,7 @@ boxes and ✅ marks there show what is built and tested.
 | | 11. Job applications | Ready to test (your ten reviews before any Auto are still to do) |
 | | 12. Software team | Ready to test |
 | | 13. Video production | Ready to test (a real render needs ComfyUI and FFmpeg) |
+| | 14. Pipeline manager | Ready to test (set up your channel repos on the Packs page) |
 
 ## What it does today
 
@@ -201,6 +202,18 @@ boxes and ✅ marks there show what is built and tested.
   - The editor joins the clips (with subtitles and music if there are any) into final/,
     and you approve the final cut. That writes social-draft.md, a draft post for the
     social media pack.
+- **Pipeline manager pack** (install it on the Packs page): keeps a queue of videos per
+  channel repo on this PC, starts each repo's own command, watches it, and starts the next
+  item when it finishes. Ask the **Pipeline manager** role in chat to add items or say what
+  is running, or open the **Queue** on the Packs page.
+  - Set up each channel in the pack's Settings: folder, command (with `{input}` for the
+    item), the output file a finished run leaves, `gpu: yes|no`, `parallel`, an optional
+    `timeout` (none by default, renders can take 12 hours or more), `quiet` and `retries`.
+    The pack page shows a full example.
+  - Every start goes through Approvals and shows the exact command. Only one GPU run goes
+    at a time; non-GPU runs go in parallel up to a cap.
+  - A run is its own process: closing or restarting the hub does not stop it, and its
+    result is picked up when the hub is back. A failed run is tried again once, then flagged.
 - **Pack tables:** a pack can show read-only tables on the Packs page (the Tracker is
   the first).
 - **Tell me when done:** a schedule with this ticked shows its result in the window
@@ -474,6 +487,7 @@ packs/social/         social media manager pack (Milestone 10)
 packs/jobs/           job applications pack (Milestone 11)
 packs/devteam/        software team pack (Milestone 12)
 packs/video/          video production pack (Milestone 13)
+packs/pipeline/       pipeline manager pack (Milestone 14)
 start.bat            starts the chat window
 ```
 

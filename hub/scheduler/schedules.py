@@ -374,6 +374,14 @@ class ScheduleStore:
             return bool(db.execute("UPDATE schedule_runs SET status = ? WHERE id = ? AND status = 'missed'",
                                    (status, run_id)).rowcount)
 
+    def add_notice(self, name: str, text: str, failed: bool = False) -> None:
+        """Milestone 14 (G-PACK-3): a notice from a pack service (no schedule run behind it: ids 0)."""
+        with closing(self._conn()) as db, db:
+            db.execute("INSERT INTO notices (run_id, schedule_id, name, status, result, reason, ended_at) "
+                       "VALUES (0, 0, ?, ?, ?, ?, ?)", (name[:200], "failed" if failed else "done",
+                                                        "" if failed else text[:2000], text[:500] if failed else "",
+                                                        time.time()))
+
     def notices(self, after: int = 0, limit: int = 20) -> list[dict[str, Any]]:
         """Finished runs of schedules that tell me (notify), newer than run id `after`."""
         with closing(self._conn()) as db:

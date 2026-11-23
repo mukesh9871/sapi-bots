@@ -49,6 +49,7 @@ from hub import connectors
 from hub.engine import packs as packs_mod
 from hub.engine.packs import PackError, PackStore
 from hub.scheduler.runner import Scheduler
+from hub.engine.services import PackServices, busy as service_busy
 from hub.scheduler.schedules import ScheduleError, ScheduleStore, describe, parse_when
 
 WEB_DIR = Path(__file__).parent / "web"
@@ -177,9 +178,11 @@ def create_app(token: str, port: int, *, login: LoginState | None = None,
         if not check_login_on_start:
             state.login_checked = True
         scheduler.start()  # G-SCHED-1: runs while the app is on; missed runs are listed (G-SCHED-2)
+        services.start()  # Milestone 14 (G-PACK-3): packs' plain background code, like a run queue
         yield
         if login_task:
             login_task.cancel()
+        await services.close()  # what a service started outside (a long render) keeps running
         await scheduler.close()  # stops scheduled role tasks (a scheduled team stops with the runs below)
         live = list(state.runs.values())
         for run in live:  # the app is closing: stop team runs cleanly
@@ -696,7 +699,8 @@ def create_app(token: str, port: int, *, login: LoginState | None = None,
                 except Exception as exc:
                     exact = f"(cannot be published as it is: {exc})"
             items.append({**item, "preview": action.preview(item["payload"]) if action else "",
-                          "fields": action.fields if action else {}, "exact": exact})
+                          "fields": action.fields if action else {}, "exact": exact,
+                          "exact_label": action.show_label if action else ""})
         return {"items": items}
 
     @app.post("/api/approvals/{item_id}/approve")
@@ -955,6 +959,10 @@ def create_app(token: str, port: int, *, login: LoginState | None = None,
                           pack_on=lambda pack: pack == "local" or pack in pack_store.enabled_dirs(),
                           **({"tick": scheduler_tick} if scheduler_tick else {}))
 
+    services = PackServices(gate, notify=schedule_store.add_notice, paused=lambda: state.paused,
+                            **({"tick": scheduler_tick} if scheduler_tick else {}))
+    app.state.services = services
+
     def target_problem(kind: Any, target: Any) -> str:
         if kind == "role":
             role = role_store.get(target) if isinstance(target, str) else None
@@ -1059,6 +1067,9 @@ def create_app(token: str, port: int, *, login: LoginState | None = None,
             sch = schedule_store.get(sid)
             if sch and (sch["pack"] == pack_id or sch["target"].startswith(f"{pack_id}.")):
                 return "one of its schedules is running: stop it first"
+        own = service_busy(pack_id)  # Milestone 14: the pack's own background work (a running render)
+        if own:
+            return own
         if state.busy and state.turn_is_role:
             chat_role = (store.get_chat(state.turn_chat_id) or {}).get("role") if state.turn_chat_id else None
             session_role = getattr(state.session, "option_kwargs", {}).get("role") if state.session else None
