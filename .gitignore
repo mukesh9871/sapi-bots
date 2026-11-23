@@ -6,3 +6,6 @@ projects/
 exports/
 config.json
 *.env
+
+# my own roles and teams (made in the app)
+packs/local/

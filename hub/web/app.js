@@ -762,8 +762,9 @@ function buildToolBoxes() {
 function showRoleList() {
   els.roleList.replaceChildren(...roles.map((r) => {
     const li = document.createElement("li");
-    li.textContent = r.problem ? `⚠ ${r.name}` : r.name;
-    li.title = r.problem ? `Needs fixing: ${r.problem}` : r.name;
+    const from = r.pack && r.pack !== "local" ? ` (${r.pack})` : "";
+    li.textContent = (r.problem ? `⚠ ${r.name}` : r.name) + from;
+    li.title = r.problem ? `Needs fixing: ${r.problem}` : r.name + from;
     li.classList.toggle("active", r.id === editingRole);
     li.classList.toggle("broken", !!r.problem);
     li.onclick = () => editRole(r.id);
@@ -786,7 +787,10 @@ function editRole(id) {
   problem.textContent = r && r.problem ? `This role cannot run until it is fixed: ${r.problem}. Saving fixes it.` : "";
   problem.hidden = !(r && r.problem);
   $("role-error").hidden = true;
-  $("role-delete").hidden = !r; $("role-copy").hidden = !r;
+  const fromPack = !!(r && r.pack && r.pack !== "local"); // Milestone 8: pack roles are read-only
+  $("role-pack-note").textContent = fromPack ? `From the ${r.pack} pack: read-only. Copy it to make your own version.` : "";
+  $("role-pack-note").hidden = !fromPack;
+  $("role-delete").hidden = !r || fromPack; $("role-copy").hidden = !r; $("role-save").hidden = fromPack;
   showRoleList();
   $("role-name").focus();
 }
@@ -867,6 +871,7 @@ async function refreshGate() {
     const g = await api("GET", "/api/gate/summary");
     els.approvalsBadge.textContent = g.pending; els.approvalsBadge.hidden = !g.pending;
     showPause(g.paused);
+    showMissedBadge(g.missed || 0);
   } catch { /* the status line reports a dead server */ }
 }
 function showPause(p) {
@@ -1006,7 +1011,8 @@ let boardTimer = 0;
 const roleName = (id) => (roleById(id) || { name: id }).name;
 
 function fillRoleSelect(sel, withNone) {
-  const opts = (withNone ? [["", "(no reviewer)"]] : []).concat(roles.filter((r) => !r.problem).map((r) => [r.id, r.name]));
+  const label = (r) => r.pack && r.pack !== "local" ? `${r.name} (${r.pack})` : r.name;
+  const opts = (withNone ? [["", "(no reviewer)"]] : []).concat(roles.filter((r) => !r.problem).map((r) => [r.id, label(r)]));
   sel.replaceChildren(...opts.map(([v, t]) => { const o = document.createElement("option"); o.value = v; o.textContent = t; return o; }));
 }
 
@@ -1020,8 +1026,9 @@ async function loadTeams() {
   ({ teams: teamsList } = await api("GET", "/api/teams"));
   $("team-list").replaceChildren(...teamsList.map((t) => {
     const li = document.createElement("li");
-    li.textContent = t.problem ? `⚠ ${t.name}` : t.name;
-    li.title = t.problem ? `Needs fixing: ${t.problem}` : t.name;
+    const from = t.pack && t.pack !== "local" ? ` (${t.pack})` : "";
+    li.textContent = (t.problem ? `⚠ ${t.name}` : t.name) + from;
+    li.title = t.problem ? `Needs fixing: ${t.problem}` : t.name + from;
     li.classList.toggle("active", boardRun === null && t.id === editingTeam);
     li.onclick = () => editTeam(t.id);
     return li;
@@ -1066,7 +1073,10 @@ function editTeam(id) {
   $("team-problem").textContent = t && t.problem ? `This team cannot start until it is fixed: ${t.problem}.` : "";
   $("team-problem").hidden = !(t && t.problem);
   $("team-error").hidden = true;
-  $("team-delete").hidden = !t; $("team-start-box").hidden = !t;
+  const fromPack = !!(t && t.pack && t.pack !== "local"); // Milestone 8: pack teams are read-only
+  $("team-pack-note").textContent = fromPack ? `From the ${t.pack} pack: read-only. You can still give it tasks.` : "";
+  $("team-pack-note").hidden = !fromPack;
+  $("team-delete").hidden = !t || fromPack; $("team-save").hidden = fromPack; $("team-start-box").hidden = !t;
   loadTeams(); loadRuns();
 }
 
@@ -1173,6 +1183,246 @@ $("run-delete").onclick = async () => {
 $("open-teams").onclick = openTeams;
 $("teams-close").onclick = () => { clearTimeout(boardTimer); $("teams-dialog").close(); };
 $("teams-dialog").addEventListener("close", () => clearTimeout(boardTimer));
+
+// ---------- schedules (Milestone 8, G-SCHED-1, G-SCHED-2) ----------
+const DAY_NAMES = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
+let schedules = [], schTargets = { roles: [], teams: [] }, editingSchedule = null, schTimer = 0;
+const when = (t) => (t ? new Date(t * 1000).toLocaleString() : "—");
+const STATUS_LABELS = { running: "running", done: "done", failed: "failed", stopped: "stopped", skipped: "skipped",
+  missed: "missed", "ran-late": "ran late", dismissed: "dismissed", budget: "stopped at its turn budget" };
+
+function buildDays() {
+  $("sch-days").replaceChildren(...DAY_NAMES.map((d) => {
+    const l = document.createElement("label"); const cb = document.createElement("input");
+    cb.type = "checkbox"; cb.value = d; l.append(cb, ` ${d[0].toUpperCase()}${d.slice(1)}`); return l;
+  }));
+}
+
+function showWhenFields() {
+  const t = $("sch-type").value;
+  $("sch-time-box").hidden = !["daily", "weekly"].includes(t);
+  $("sch-days").hidden = t !== "weekly";
+  $("sch-minutes-box").hidden = t !== "interval";
+  $("sch-folder-box").hidden = t !== "file";
+  $("sch-after").hidden = t !== "after";
+}
+
+function fillTargets(kind, value) {
+  const list = kind === "team" ? schTargets.teams : schTargets.roles;
+  $("sch-target-label").textContent = kind === "team" ? "Team" : "Role";
+  $("sch-target").replaceChildren(...list.map((x) => {
+    const o = document.createElement("option"); o.value = x.id;
+    o.textContent = x.pack && x.pack !== "local" ? `${x.name} (${x.pack})` : x.name; return o;
+  }));
+  if (value) $("sch-target").value = value;
+}
+
+async function loadSchedules() {
+  const data = await api("GET", "/api/schedules");
+  schedules = data.schedules; schTargets = { roles: data.roles, teams: data.teams };
+  $("schedule-list").replaceChildren(...schedules.map((x) => {
+    const li = document.createElement("li");
+    const from = x.pack !== "local" ? ` (${x.pack})` : "";
+    li.textContent = `${x.running ? "▶ " : x.enabled ? "" : "○ "}${x.name}${from}`;
+    li.title = `${x.when}${x.enabled ? "" : " (switched off)"}`;
+    li.classList.toggle("active", x.id === editingSchedule);
+    li.onclick = () => editSchedule(x.id);
+    return li;
+  }));
+  $("schedule-list-empty").hidden = schedules.length > 0;
+  // G-SCHED-2: missed runs, each with Run late and Dismiss
+  $("missed-list").replaceChildren(...data.missed.map((m) => {
+    const li = document.createElement("li");
+    const text = document.createElement("div");
+    text.textContent = `${m.name}: missed ${m.missed_count > 1 ? `${m.missed_count} times, first ` : ""}at ${when(m.due_at)} (${m.reason})`;
+    const late = document.createElement("button"); late.type = "button"; late.className = "ghost"; late.textContent = "Run late";
+    late.onclick = () => missedAction(m.id, "run");
+    const dismiss = document.createElement("button"); dismiss.type = "button"; dismiss.className = "ghost"; dismiss.textContent = "Dismiss";
+    dismiss.onclick = () => missedAction(m.id, "dismiss");
+    li.append(text, late, dismiss); return li;
+  }));
+  $("missed-empty").hidden = data.missed.length > 0;
+  showMissedBadge(data.missed.length);
+  return data;
+}
+
+function showMissedBadge(n) {
+  $("missed-badge").textContent = n; $("missed-badge").hidden = !n;
+}
+
+async function missedAction(id, action) {
+  try { await api("POST", `/api/missed/${id}/${action}`); } catch (err) { flash(`Could not do that: ${err.message}.`, true); }
+  await refreshSchedules();
+}
+
+function editSchedule(id) {
+  const x = id ? schedules.find((s) => s.id === id) : null;
+  editingSchedule = x ? x.id : null;
+  $("sch-name").value = x ? x.name : "";
+  $("sch-kind").value = x ? x.kind : "role";
+  fillTargets($("sch-kind").value, x ? x.target : null);
+  $("sch-task").value = x ? x.task : "";
+  const spec = x ? x.spec : { type: "daily", time: "08:00" };
+  $("sch-type").value = spec.type;
+  $("sch-time").value = spec.time || "08:00";
+  for (const cb of $("sch-days").querySelectorAll("input")) cb.checked = (spec.days || []).includes(cb.value);
+  $("sch-minutes").value = spec.minutes || 60;
+  $("sch-folder").value = spec.folder || "";
+  $("sch-after").replaceChildren(...schedules.filter((s) => s.id !== editingSchedule).map((s) => {
+    const o = document.createElement("option"); o.value = s.id; o.textContent = s.name; return o;
+  }));
+  if (spec.type === "after") $("sch-after").value = spec.schedule;
+  showWhenFields();
+  $("sch-error").hidden = true;
+  $("sch-delete").hidden = !x; $("sch-status-box").hidden = !x;
+  if (x) showScheduleStatus(x);
+  loadSchedules().catch(() => {});
+}
+
+async function showScheduleStatus(x) {
+  $("sch-enabled").checked = x.enabled;
+  const last = x.last;
+  const lastText = last ? `Last run: ${STATUS_LABELS[last.status] || last.status} at ${when(last.started_at || last.due_at)}`
+    + (last.reason ? ` (${last.reason})` : "") + (last.result ? `. Result: ${last.result.slice(0, 300)}` : "") : "Not run yet.";
+  const next = x.enabled ? (x.next_run ? `Next run: ${when(x.next_run)}.` : `Runs ${x.when}.`) : "Switched off: it does not run.";
+  $("sch-status").textContent = `${x.when}. ${next} ${lastText}`; // P-ROUT-3: last run, result and next run
+  $("sch-run").hidden = x.running; $("sch-stop").hidden = !x.running;
+  try {
+    const { runs } = await api("POST", `/api/schedules/${x.id}/runs`);
+    if (editingSchedule !== x.id) return;
+    $("sch-runs").replaceChildren(...runs.map((r) => {
+      const li = document.createElement("li");
+      li.textContent = `${when(r.started_at || r.due_at)} · ${STATUS_LABELS[r.status] || r.status}` + (r.reason ? ` · ${r.reason}` : "")
+        + (r.result ? ` · ${r.result.slice(0, 200)}` : "");
+      if (r.ref.startsWith("chat:")) { // a role run is a chat in history
+        const a = document.createElement("button"); a.type = "button"; a.className = "ghost"; a.textContent = "Open chat";
+        a.onclick = () => { $("schedules-dialog").close(); openChat(Number(r.ref.slice(5))); }; li.append(" ", a);
+      } else if (r.ref.startsWith("team:")) {
+        const a = document.createElement("button"); a.type = "button"; a.className = "ghost"; a.textContent = "Open board";
+        a.onclick = () => { $("schedules-dialog").close(); boardRun = Number(r.ref.slice(5)); openTeams(); }; li.append(" ", a);
+      }
+      return li;
+    }));
+  } catch { /* the list is extra */ }
+}
+
+function scheduleBody() {
+  const type = $("sch-type").value, spec = { type };
+  if (type === "daily" || type === "weekly") spec.time = $("sch-time").value;
+  if (type === "weekly") spec.days = [...$("sch-days").querySelectorAll("input:checked")].map((cb) => cb.value);
+  if (type === "interval") spec.minutes = Number($("sch-minutes").value);
+  if (type === "file") spec.folder = $("sch-folder").value;
+  if (type === "after") spec.schedule = Number($("sch-after").value);
+  return { name: $("sch-name").value, kind: $("sch-kind").value, target: $("sch-target").value, task: $("sch-task").value, spec };
+}
+
+async function refreshSchedules() {
+  try { await loadSchedules(); } catch (err) { flash(`Could not load schedules: ${err.message}.`, true); return; }
+  const x = schedules.find((s) => s.id === editingSchedule);
+  if (x) showScheduleStatus(x);
+  clearTimeout(schTimer);
+  if ($("schedules-dialog").open && schedules.some((s) => s.running)) schTimer = setTimeout(refreshSchedules, 3000);
+}
+
+async function openSchedules() {
+  buildDays();
+  try { await loadSchedules(); } catch (err) { flash(`Could not load schedules: ${err.message}.`, true); return; }
+  editSchedule(schedules[0]?.id ?? null);
+  $("schedules-dialog").showModal();
+  refreshSchedules();
+}
+
+$("sch-type").onchange = showWhenFields;
+$("sch-kind").onchange = () => fillTargets($("sch-kind").value, null);
+$("schedule-new").onclick = () => editSchedule(null);
+$("schedule-form").onsubmit = async (e) => {
+  e.preventDefault();
+  try {
+    const { schedule } = editingSchedule
+      ? await api("PUT", `/api/schedules/${editingSchedule}`, scheduleBody())
+      : await api("POST", "/api/schedules", scheduleBody());
+    editingSchedule = schedule.id;
+    await loadSchedules(); editSchedule(schedule.id);
+  } catch (err) { $("sch-error").textContent = err.message; $("sch-error").hidden = false; }
+};
+$("sch-delete").onclick = async () => {
+  if (!confirm("Delete this schedule and its run history? Chats and team runs it made are kept.")) return;
+  try { await api("DELETE", `/api/schedules/${editingSchedule}`); editingSchedule = null; await loadSchedules(); editSchedule(schedules[0]?.id ?? null); }
+  catch (err) { flash(`Could not delete: ${err.message}.`, true); }
+};
+$("sch-enabled").onchange = async () => {
+  try { await api("POST", `/api/schedules/${editingSchedule}/enable`, { enabled: $("sch-enabled").checked }); }
+  catch (err) { flash(`Could not change it: ${err.message}.`, true); }
+  refreshSchedules();
+};
+$("sch-run").onclick = async () => {
+  try { await api("POST", `/api/schedules/${editingSchedule}/run`); } catch (err) { flash(`${err.message}.`, true); }
+  refreshSchedules();
+};
+$("sch-stop").onclick = async () => {
+  try { await api("POST", `/api/schedules/${editingSchedule}/stop`); } catch (err) { flash(`${err.message}.`, true); }
+  refreshSchedules();
+};
+$("open-schedules").onclick = openSchedules;
+$("schedules-close").onclick = () => $("schedules-dialog").close();
+$("schedules-dialog").addEventListener("close", () => clearTimeout(schTimer));
+
+// ---------- packs (Milestone 8, G-PACK-1, G-PACK-2) ----------
+async function loadPacks() {
+  const { packs } = await api("GET", "/api/packs");
+  $("pack-list").replaceChildren(...packs.map((pk) => {
+    const card = document.createElement("div"); card.className = "pack-card";
+    const head = document.createElement("div");
+    const title = document.createElement("strong"); title.textContent = `${pk.name}${pk.version ? ` ${pk.version}` : ""}`;
+    const st = document.createElement("span"); st.className = "pill";
+    st.textContent = !pk.installed ? "not installed" : pk.enabled ? "on" : "switched off";
+    head.append(title, " ", st);
+    const desc = document.createElement("div"); desc.className = "muted small"; desc.textContent = pk.description;
+    const has = document.createElement("div"); has.className = "small";
+    has.textContent = `Roles: ${pk.roles.join(", ") || "none"} · Teams: ${pk.teams.join(", ") || "none"} · `
+      + `Connectors: ${pk.connectors.join(", ") || "none"} · Schedules: ${pk.schedules.map((x) => x.name).join(", ") || "none"}`;
+    const rules = document.createElement("div"); rules.className = "small";
+    rules.textContent = pk.rules.length ? `Suggested rules: ${pk.rules.map((x) => `${x.action} ${x.mode}`).join(", ")} (Auto is installed as Ask)` : "";
+    const problem = document.createElement("div"); problem.className = "error-text";
+    problem.textContent = pk.problem || pk.load_problem; problem.hidden = !(pk.problem || pk.load_problem);
+    const readme = document.createElement("details");
+    const sum = document.createElement("summary"); sum.textContent = "About this pack";
+    const body = document.createElement("div"); body.className = "report"; body.innerHTML = renderMarkdown(pk.readme || ""); // sanitized
+    readme.append(sum, body);
+    const menu = document.createElement("menu");
+    const btn = (label, cls, fn) => { const b = document.createElement("button"); b.type = "button"; b.className = cls; b.textContent = label; b.onclick = fn; menu.append(b); };
+    if (!pk.installed) btn("Install", "", () => packAction(pk, "install"));
+    else {
+      btn(pk.enabled ? "Switch off" : "Switch on", "ghost", () => packAction(pk, "enable", { enabled: !pk.enabled }));
+      btn("Remove", "danger", () => {
+        if (confirm(`Remove ${pk.name}? Its roles, teams and connectors disappear, and its approval rules, schedules and waiting approvals are deleted. Its files in the packs folder, your chats and the activity log are kept.`)) packAction(pk, "remove");
+      });
+    }
+    card.append(head, desc, has, rules, problem, readme, menu); return card;
+  }));
+  $("pack-list-empty").hidden = packs.length > 0;
+}
+
+async function packAction(pk, action, body) {
+  try {
+    const res = await api("POST", `/api/packs/${encodeURIComponent(pk.id)}/${action}`, body);
+    if (action === "install") {
+      flash(`Installed ${pk.name}.` + (res.suggested_auto.length ? ` Suggested Auto rules were set to Ask (${res.suggested_auto.join(", ")}): switch them in Settings if you want.` : "")
+        + (res.schedules ? " Its schedules are switched off: turn them on in Schedules." : ""));
+    } else if (action === "remove") flash(`Removed ${pk.name}.`);
+  } catch (err) { flash(`Could not do that: ${err.message}.`, true); }
+  await loadPacks();
+  loadRoles().catch(() => {}); // pack roles appear or disappear in Talk to
+}
+
+$("open-packs").onclick = async () => {
+  try { await loadPacks(); } catch (err) { flash(`Could not load packs: ${err.message}.`, true); return; }
+  $("packs-dialog").showModal();
+};
+$("packs-close").onclick = () => $("packs-dialog").close();
+
+// The missed badge shows at start-up too, so a missed run is never hidden (G-SCHED-2).
+api("GET", "/api/schedules").then((d) => showMissedBadge(d.missed.length)).catch(() => {});
 
 // ---------- new chat ----------
 els.newChat.onclick = async () => {

@@ -17,8 +17,8 @@ boxes and ✅ marks there show what is built and tested.
 | | 4. Web search and polish | Done |
 | 2. Generic platform | 5. Roles and single agents | Done |
 | | 6. Approvals, log and budgets | Done |
-| | 7. Teams | Ready to test |
-| | 8. Scheduler and pack format | Not started |
+| | 7. Teams | Done |
+| | 8. Scheduler and pack format | Ready to test |
 | 3. Instruction packs | 9 to 13. Routines, social media, jobs, software team, video | Not started |
 
 ## What it does today
@@ -78,6 +78,34 @@ boxes and ✅ marks there show what is built and tested.
     it with an answer box.
   - A run that uses its turn budget stops and says so. The global Pause pauses every
     team. After a restart, unfinished runs are marked stopped and never re-run.
+- **Schedules:** the **Schedules** button lets a role or a team do a task on its own:
+  every day at a time, on chosen days, every few minutes or hours, when a new file appears
+  in a folder, or after another schedule finished well. Each schedule shows its last run,
+  result and next run. A role's run becomes a chat in history (open it and carry on); a
+  team's run shows on the Teams board. **Run now** works whenever automation is not paused,
+  and **Stop** at any time. A run that uses its turn budget does not count as finished well.
+  - Runs happen only while the app is on. A run that came due while the app was off (or
+    more than 2 minutes late), or while automation was paused, is listed under **Missed
+    runs** with **Run late** and **Dismiss**. The badge on the button shows how many.
+  - Pause also stops scheduled role tasks. A schedule never runs twice at once, and a
+    chain of "after" schedules can never loop.
+  - A folder watch counts file names that are new since it was made or switched on
+    (copied or moved in). Saving a file that is already there does not count. Files that
+    come during a run are handled by the next run. Files that arrived while the app was
+    off are listed as missed, with their names. The role
+    gets the file names. It can open them only if the folder is inside its own folder.
+  - A scheduled chat cannot be continued or deleted while its run is still writing it.
+- **Packs:** the **Packs** button lists the packs in the `packs` folder. **Install** adds
+  the pack's roles, teams, connectors, approval rules and schedules. **Switch off** hides
+  them and keeps the rules and schedules (they do not run while it is off). **Remove** deletes its rules, schedules and
+  waiting approvals. None of this changes the app itself or another pack.
+  - A pack's suggested Auto rules are installed as Ask, and its schedules are installed
+    switched off: you turn on what you want.
+  - Pack roles and teams are read-only (ids like `sample.notetaker`). Copy a role to make
+    your own version.
+  - The **Sample pack** shows the format: a planner and a note taker, a team, an "add a
+    note" connector (writes to `data/outbox/sample-notes.md`, through Approvals) and a
+    morning schedule.
 - **Terminal chat** for quick use without the window.
 
 ## Requirements
@@ -164,9 +192,11 @@ Everything stays on your PC. None of these are committed to git.
 | Roles | `packs/local/roles/<id>.md` (readable, safe to edit by hand) |
 | Each role's working folder | `projects/role-<id>/` |
 | Team templates | `packs/local/teams/<id>.md` (readable, safe to edit by hand) |
+| Packs | `packs/<id>/` (the sample pack is part of the app; which ones are installed is in `data/hub.db`) |
+| Schedules and their runs | `data/hub.db` (SQLite) |
 | Each team run's working folder (its files and `REPORT.md`) | `projects/team-<run>/` |
 | Approval rules, inbox, activity log, team runs (steps, log, questions) | `data/hub.db` (SQLite; the activity log is append-only) |
-| Demo connector output | `data/outbox/notes.md` |
+| Demo connector output | `data/outbox/notes.md` and `data/outbox/sample-notes.md` (sample pack) |
 
 **Settings in `config.json`:**
 
@@ -214,6 +244,26 @@ A file that lists anything else (for example `Bash`) is marked
 "needs fixing" and never runs. Deleting a role keeps its chats (readable, not
 continuable) and its folder.
 
+**A pack** is a folder `packs/<id>/`:
+
+```
+packs/<id>/pack.md          header: name, version, description; below it, what the pack does
+packs/<id>/roles/*.md       roles (same format as your own)
+packs/<id>/teams/*.md       teams (a plain role id means this pack's role)
+packs/<id>/connectors/*.py  connectors (modules that list ACTIONS, like hub/connectors/)
+packs/<id>/rules.md         suggested rules, one per line: "<action id>: ask|never|auto [cap N]"
+packs/<id>/schedules/*.md   schedules: header "name", "run: role <id>" or "run: team <id>",
+                            "when: daily 08:00" (or weekly mon,fri 09:30 / every 90 minutes /
+                            file C:\folder / after <another schedule file name>);
+                            the task below the header
+```
+
+A pack connector loads only while its pack is installed and switched on. An action that
+clashes with one that already exists (same id, same tool name, or same platform and
+action) is not loaded: the pack installed first keeps it, and the other cannot be
+installed. A pack that does not read cleanly is shown with the problem and
+cannot be installed.
+
 **A team file** looks like this. Members are role ids (comma-separated), and the notes
 below the header go to the lead:
 
@@ -256,6 +306,10 @@ folder under `.claude\projects`. It never touches your other Claude Code project
   read (`CLAUDE.md`, `AGENTS.md`, `.claude`, `.git`, `.vscode` and similar), Windows
   shortcut-type files (`.url`, `.lnk`, `desktop.ini`) and files pytest would run
   (`conftest.py`, `test_*.py`). `pytest.ini` also keeps pytest out of `projects/`.
+- **Installing a pack never switches a rule to Auto** and never edits files in `hub/`, and
+  the app never changes a pack's files. But a pack's connectors are Python code that runs
+  with the app's full rights: install only packs you trust (the sample pack is part of
+  the app).
 - **A team stays in its folder.** Every member, the lead too, gets the same folder
   check, on the run's folder `projects/team-<run>/`. Workers can only ask you
   questions. Only the lead can assign steps or finish.
@@ -285,13 +339,17 @@ hub/
     teams.py           team template files: read, check, save, delete (Milestone 7)
     runs.py            team runs in data/hub.db: steps, log, questions, restart handling
     orchestrator.py    runs a team: lead tools, member steps, pause, stop, review gate, budgets
+    packs.py           packs: read, install, switch off, remove (Milestone 8)
+  scheduler/
+    schedules.py       schedules and their runs in data/hub.db; when they run next
+    runner.py          the scheduler loop: due runs, missed runs, file and after triggers
   gate/
     gate.py            approval gate: rules, caps, pause, repeats, approve and reject (Milestone 6)
     store.py           data/hub.db: rules, approvals inbox, append-only activity log
   connectors/
     base.py            what a connector action looks like
     demo.py            demo "post a note" acting tool
-    __init__.py        finds every connector in this folder (no engine change to add one)
+    __init__.py        finds every connector here and in switched-on packs (no engine change)
   web/               index.html, app.css, app.js, vendor/ (marked, DOMPurify, highlight.js)
 scripts/usage_test.py  plan-usage measurement
 scripts/make_shortcut.ps1  creates the desktop shortcut
@@ -321,7 +379,7 @@ In PowerShell, use `$env:HUB_LIVE='1'` instead of `set HUB_LIVE=1`.
 - Offline tests use a temporary database and a fake Claude session. They never touch
   your real `data/chats.db`.
 - Live tests use your subscription (a few short messages, mostly on Haiku).
-- Current result: 366 passed (340 offline, 26 live).
+- Current result: 429 passed (401 offline, 28 live).
 
 ## Working rules for development
 

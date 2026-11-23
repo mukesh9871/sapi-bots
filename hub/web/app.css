@@ -190,3 +190,13 @@ dialog.huge { width: min(1150px, 96vw); max-height: 92vh; }
 .report { font-size: 14px; }
 .events { font-size: 12.5px; padding-left: 18px; max-height: 20vh; overflow: auto; }
 #run-message { flex: 1; min-width: 8em; }
+
+/* Milestone 8: schedules and packs */
+.days { display: flex; flex-wrap: wrap; gap: 10px; margin: 6px 0; }
+.days label { font-size: 13px; }
+.missed { list-style: none; padding: 0; margin: 0; font-size: 12.5px; }
+.missed li { border: 1px solid var(--border); border-radius: 8px; padding: 6px; margin-bottom: 6px; }
+.missed li button { margin: 4px 4px 0 0; padding: 2px 8px; font-size: 12px; }
+.pack-card { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; margin-bottom: 10px; }
+.pack-card > div { margin: 3px 0; }
+label.check { display: flex; gap: 6px; align-items: center; }

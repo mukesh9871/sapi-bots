@@ -1,4 +1,4 @@
-"""Local hub server: serves the chat window and streams replies (Milestones 2 to 7).
+"""Local hub server: serves the chat window and streams replies (Milestones 2 to 8).
 
 Run:  .venv\\Scripts\\python -m hub.server        (opens your browser)
 
@@ -45,6 +45,11 @@ from hub.engine import roles as roles_mod
 from hub.engine.orchestrator import TeamRun, new_run
 from hub.engine.runs import RunStore
 from hub.engine.teams import TeamError, TeamStore
+from hub import connectors
+from hub.engine import packs as packs_mod
+from hub.engine.packs import PackError, PackStore
+from hub.scheduler.runner import Scheduler
+from hub.scheduler.schedules import ScheduleError, ScheduleStore, describe
 
 WEB_DIR = Path(__file__).parent / "web"
 COOKIE = "hub_token"
@@ -126,7 +131,8 @@ def create_app(token: str, port: int, *, login: LoginState | None = None,
                notices: list[str] | None = None, check_login_on_start: bool = True,
                history: HistoryStore | None = None, roles: RoleStore | None = None,
                gate_store: GateStore | None = None, team_store: TeamStore | None = None,
-               run_store: RunStore | None = None) -> FastAPI:
+               run_store: RunStore | None = None, pack_store: PackStore | None = None,
+               schedule_store: ScheduleStore | None = None, scheduler_tick: float | None = None) -> FastAPI:
     state = HubState(token=token, port=port, login=login or LoginState(None), notices=notices or [],
                      history=history or HistoryStore(), roles=roles or RoleStore())
     # G-BUDGET-2: the pause switch is read on every acting call, so it applies at once.
@@ -147,6 +153,10 @@ def create_app(token: str, port: int, *, login: LoginState | None = None,
     teams = team_store or TeamStore()
     teams.roles_get = role_store.get
     run_store = run_store or RunStore(gate.store.path)
+    # Milestone 8 (G-PACK-1): installed, switched-on packs add roles, teams and connectors.
+    pack_store = pack_store or PackStore(db_path=gate.store.path)
+    connectors.pack_dirs = role_store.pack_dirs = teams.pack_dirs = pack_store.enabled_dirs
+    schedule_store = schedule_store or ScheduleStore(gate.store.path)
     left = run_store.stop_unfinished()  # a restart never resumes a team by itself
     if left:
         state.notices.append(f"{left} team run(s) were stopped by the restart. Their work so far is on the Teams board.")
@@ -165,9 +175,11 @@ def create_app(token: str, port: int, *, login: LoginState | None = None,
         login_task = asyncio.create_task(refresh_login()) if check_login_on_start else None
         if not check_login_on_start:
             state.login_checked = True
+        scheduler.start()  # G-SCHED-1: runs while the app is on; missed runs are listed (G-SCHED-2)
         yield
         if login_task:
             login_task.cancel()
+        await scheduler.close()  # stops scheduled role tasks (a scheduled team stops with the runs below)
         live = list(state.runs.values())
         for run in live:  # the app is closing: stop team runs cleanly
             await run.stop("the app was closed")
@@ -265,6 +277,7 @@ def create_app(token: str, port: int, *, login: LoginState | None = None,
             state.paused = body["automation_paused"]  # takes effect at once, even if the save below fails
             if state.paused:
                 await stop_role_turn()  # G-BUDGET-2: pausing also stops a running role task
+                await scheduler.stop_all("automation was paused", kind="role")  # and scheduled ones
             for run in list(state.runs.values()):  # and pauses or resumes every team run
                 await (run.pause("global") if state.paused else run.resume("global"))
         try:
@@ -368,6 +381,8 @@ def create_app(token: str, port: int, *, login: LoginState | None = None,
             return _bad("bad chat id")
         if chat_id is not None and store.get_chat(chat_id) is None:
             return _bad("this chat no longer exists", 404)
+        if chat_id in scheduled_chats:  # its scheduled run is still writing it (review M8)
+            return _bad("a scheduled run is still writing this chat: wait or stop it in Schedules", 409)
         role_id = body.get("role") if chat_id is None else None  # an existing chat keeps its role
         if role_id is not None:
             role = role_store.get(role_id) if isinstance(role_id, str) else None
@@ -569,6 +584,8 @@ def create_app(token: str, port: int, *, login: LoginState | None = None,
     async def delete_chat(chat_id: int):  # F-HIST-3, D-2
         if state.busy and chat_id in (state.chat_id, state.turn_chat_id):
             return _bad("a reply is still streaming in this chat", 409)
+        if chat_id in scheduled_chats:
+            return _bad("a scheduled run is still writing this chat: wait or stop it in Schedules", 409)
         if chat_id == state.closing_chat_id:  # its process could still write the transcript
             return _bad("this chat is still closing, try again in a moment", 409)
         if chat_id == state.chat_id:
@@ -596,12 +613,16 @@ def create_app(token: str, port: int, *, login: LoginState | None = None,
             return _bad("confirmation missing")
         if state.busy:
             return _bad("a reply is still streaming", 409)
+        if scheduler.active:  # a scheduled run is writing a chat or a team's transcripts
+            return _bad("a scheduled run is still going: wait or stop it first", 409)
         if state.runs:  # a running team still needs its transcripts
             closing = all(r.stopped or r.finished for r in state.runs.values())
             return _bad("a team run is still closing: try again in a moment" if closing
                         else "a team is still running: stop it first", 409)
         async with exclusive():
             await detach_session()
+            if scheduler.active:  # a scheduled run started while the chat process was closing (review M8)
+                return _bad("a scheduled run is still going: wait or stop it first", 409)
             if state.runs:  # a team started while the chat process was closing (review M7-5 L2)
                 return _bad("a team is still running: stop it first", 409)
             # Team runs go too: their steps and outputs are history (their project folders stay).
@@ -657,7 +678,8 @@ def create_app(token: str, port: int, *, login: LoginState | None = None,
     # ---- approvals, activity log, rules, pause (Milestone 6) ---------------------------
     @app.get("/api/gate/summary")
     async def gate_summary() -> dict[str, Any]:  # UI 8 badge, UI 13 usage bar
-        return {"pending": gate.store.pending_count(), "paused": state.paused}
+        # G-SCHED-2: the missed count too, so the Schedules badge updates while the window is open
+        return {"pending": gate.store.pending_count(), "paused": state.paused, "missed": len(schedule_store.missed())}
 
     @app.get("/api/approvals")
     async def list_approvals() -> dict[str, Any]:  # G-APPR-2
@@ -760,15 +782,19 @@ def create_app(token: str, port: int, *, login: LoginState | None = None,
             return _bad(f"this team cannot start: {team.problem}")
         if state.paused:
             return _bad("automation is paused: resume it to start a team", 409)
+        return {"run_id": launch_team(team, task.strip()).run_id}
+
+    def launch_team(team: Any, task: str) -> TeamRun:
+        """Starts a team run (from the board or a schedule)."""
         roles = {rid: role_store.get(rid) for rid in {team.lead, team.reviewer, *team.members} if rid}
-        run = new_run(team, roles, task.strip(), run_store, gate,
+        run = new_run(team, roles, task, run_store, gate,
                       # A blank role model uses the Settings model, as in role chats (R-AUTH-10).
                       lambda **kw: ChatSession(ctrl_c_shield=False, model=config.load()["model"] or None, **kw),
                       roles_mod.ROLE_WORK_ROOT)
         state.runs[run.run_id] = run
         handle = run.run_task = asyncio.create_task(run.run())  # kept: a strong reference, awaited at shutdown
         handle.add_done_callback(lambda _t, rid=run.run_id: state.runs.pop(rid, None))
-        return {"run_id": run.run_id}
+        return run
 
     @app.get("/api/runs")
     async def list_runs() -> dict[str, Any]:
@@ -842,6 +868,228 @@ def create_app(token: str, port: int, *, login: LoginState | None = None,
         if ids is None:
             return _bad("run not found", 404)
         return {"ok": True, **await forget_sessions(ids)}
+
+    # ---- schedules (Milestone 8, G-SCHED-1, G-SCHED-2) -------------------------------------
+    async def scheduled_role(role_id: str, task: str, name: str) -> tuple[str, str, str]:
+        """A role task from a schedule. It becomes a chat in history, so I can read and continue it."""
+        role = role_store.get(role_id)
+        if role is None or role.problem:
+            return "failed", f"the role {role_id} is missing or needs fixing", ""
+        chat = store.create_chat(task, role_id)
+        scheduled_chats.add(chat["id"])  # nobody else writes or deletes it while this runs
+        store.rename(chat["id"], f"Scheduled: {name}"[:80])
+        store.add_message(chat["id"], "user", task)
+        session = ChatSession(ctrl_c_shield=False, role=role, model=config.load()["model"] or None, gate=gate)
+        reply, status, why = [], "done", ""
+        try:
+            await session.connect()
+            async for ev in session.send(task):
+                if ev.kind == "init" and session.session_id:
+                    store.set_session(chat["id"], session.session_id, session.options.system_prompt)
+                elif ev.kind == "text":
+                    reply.append(ev.text)
+                elif ev.kind == "error":
+                    status, why = "failed", ev.text
+                elif ev.kind == "done":
+                    if str(ev.data.get("terminal_reason") or "").startswith("aborted"):
+                        status = "stopped"
+                    elif ev.data.get("subtype") == "error_max_turns":
+                        status, why = "budget", "it used its turn budget"  # G-BUDGET-1: not finished well
+                    elif ev.data.get("is_error"):
+                        status = "failed"
+        except asyncio.CancelledError:
+            status = "stopped"  # the partial reply is saved marked as stopped
+            raise
+        finally:
+            text = "".join(reply)
+            try:
+                if text or why:
+                    mark = status if status in ("stopped", "budget") else ""  # shown in the chat like a role chat
+                    store.add_message(chat["id"], "bot", text or f"({why})", mark)
+                await session.close()
+            except Exception:
+                pass
+            finally:
+                scheduled_chats.discard(chat["id"])
+        return status, (text or why), f"chat:{chat['id']}"
+
+    async def scheduled_team(team_id: str, task: str, name: str) -> tuple[str, str, str]:
+        team = teams.get(team_id)
+        if team is None or team.problem:
+            return "failed", f"the team {team_id} is missing or needs fixing", ""
+        run = launch_team(team, task)
+        try:
+            await asyncio.shield(run.run_task)
+        except asyncio.CancelledError:
+            await run.stop("its schedule run was stopped")
+            raise
+        rec = run_store.run(run.run_id) or {}
+        status = {"done": "done", "stopped": "stopped"}.get(rec.get("status"), "failed")
+        return status, rec.get("report") or rec.get("reason") or "", f"team:{run.run_id}"
+
+    scheduled_chats: set[int] = set()  # chats a scheduled role run is writing right now
+    scheduler = Scheduler(schedule_store, scheduled_role, scheduled_team, paused=lambda: state.paused,
+                          pack_on=lambda pack: pack == "local" or pack in pack_store.enabled_dirs(),
+                          **({"tick": scheduler_tick} if scheduler_tick else {}))
+
+    def target_problem(kind: Any, target: Any) -> str:
+        if kind == "role":
+            role = role_store.get(target) if isinstance(target, str) else None
+            return "pick a role" if role is None else (f"this role needs fixing: {role.problem}" if role.problem else "")
+        if kind == "team":
+            team = teams.get(target) if isinstance(target, str) else None
+            return "pick a team" if team is None else (f"this team needs fixing: {team.problem}" if team.problem else "")
+        return "run a role or a team"
+
+    def schedule_view(sch: dict[str, Any], names: dict[int, str]) -> dict[str, Any]:
+        return {**{k: v for k, v in sch.items() if k != "state"}, "when": describe(sch["spec"], names),
+                "running": sch["id"] in scheduler.active, "last": schedule_store.last_run(sch["id"])}
+
+    @app.get("/api/schedules")
+    async def list_schedules() -> dict[str, Any]:
+        all_s = schedule_store.list()
+        names = {x["id"]: x["name"] for x in all_s}
+        return {"schedules": [schedule_view(x, names) for x in all_s], "missed": schedule_store.missed(),
+                "roles": [{"id": r.id, "name": r.name, "pack": r.pack} for r in role_store.list() if not r.problem],
+                "teams": [{"id": t.id, "name": t.name, "pack": t.pack} for t in teams.list() if not t.problem]}
+
+    def schedule_fields(body: dict[str, Any] | None) -> tuple | str:
+        if not body:
+            return "bad request"
+        problem = target_problem(body.get("kind"), body.get("target"))
+        if problem:
+            return problem
+        spec = body.get("spec")
+        if isinstance(spec, dict) and spec.get("type") == "after":
+            other = schedule_store.get(spec.get("schedule")) if isinstance(spec.get("schedule"), int) else None
+            if other is None:
+                return "pick the schedule it follows"
+        return (body.get("name", ""), body["kind"], body["target"], body.get("task", ""), spec)
+
+    @app.post("/api/schedules")
+    async def add_schedule(request: Request):
+        fields = schedule_fields(await read_json(request))
+        if isinstance(fields, str):
+            return _bad(fields)
+        try:
+            return {"schedule": schedule_store.add(*fields)}
+        except ScheduleError as exc:
+            return _bad(str(exc))
+
+    @app.put("/api/schedules/{sid}")
+    async def edit_schedule(sid: int, request: Request):
+        fields = schedule_fields(await read_json(request))
+        if isinstance(fields, str):
+            return _bad(fields)
+        if isinstance(fields[4], dict) and (fields[4].get("schedule") == sid or schedule_store.would_loop(sid, fields[4])):
+            return _bad("a schedule cannot follow itself, not even through other schedules")
+        try:
+            return {"schedule": schedule_store.update(sid, *fields)}
+        except ScheduleError as exc:
+            return _bad(str(exc), 404 if "no longer exists" in str(exc) else 400)
+
+    @app.delete("/api/schedules/{sid}")
+    async def delete_schedule(sid: int):
+        if sid in scheduler.active:
+            return _bad("it is running: stop it first", 409)
+        return {"ok": True} if schedule_store.delete(sid) else _bad("schedule not found", 404)
+
+    @app.post("/api/schedules/{sid}/{action}")
+    async def schedule_action(sid: int, action: str, request: Request):
+        if schedule_store.get(sid) is None:
+            return _bad("schedule not found", 404)
+        if action == "enable":
+            body = await read_json(request) or {}
+            if not isinstance(body.get("enabled"), bool):
+                return _bad("enabled must be true or false")
+            return {"schedule": schedule_store.set_enabled(sid, body["enabled"])}
+        if action == "run":
+            why = await scheduler.run_now(sid)
+            return _bad(f"cannot run it now: {why}", 409) if why else {"ok": True}
+        if action == "stop":
+            return {"ok": True} if await scheduler.stop(sid) else _bad("it is not running", 409)
+        if action == "runs":
+            return {"runs": schedule_store.runs(sid)}
+        return _bad("unknown action", 404)
+
+    @app.post("/api/missed/{run_id}/{action}")
+    async def missed_action(run_id: int, action: str):  # G-SCHED-2: I choose whether to run it late
+        missed = schedule_store.run(run_id)
+        if missed is None or missed["status"] != "missed":
+            return _bad("this missed run was already handled", 404)
+        if action == "dismiss":
+            schedule_store.close_missed(run_id, "dismissed")
+            return {"ok": True}
+        if action == "run":
+            why = await scheduler.run_now(missed["schedule_id"], late_of=run_id)
+            return _bad(f"cannot run it now: {why}", 409) if why else {"ok": True}
+        return _bad("unknown action", 404)
+
+    # ---- packs (Milestone 8, G-PACK-1, G-PACK-2) ------------------------------------------------
+    def pack_busy(pack_id: str) -> str:
+        mine = lambda rid: isinstance(rid, str) and rid.startswith(f"{pack_id}.")
+        if any(r.team.pack == pack_id or any(mine(m.role.id) for m in r.members.values()) for r in state.runs.values()):
+            return "one of its teams or roles is working in a team run: stop it first"
+        for sid in scheduler.active:
+            sch = schedule_store.get(sid)
+            if sch and (sch["pack"] == pack_id or sch["target"].startswith(f"{pack_id}.")):
+                return "one of its schedules is running: stop it first"
+        if state.busy and state.turn_is_role:
+            chat_role = (store.get_chat(state.turn_chat_id) or {}).get("role") if state.turn_chat_id else None
+            session_role = getattr(state.session, "option_kwargs", {}).get("role") if state.session else None
+            if mine(chat_role) or mine(getattr(session_role, "id", None)) or state.turn_chat_id is None:
+                return "a role is answering in a chat: wait or stop it first"
+        return ""
+
+    @app.get("/api/packs")
+    async def list_packs() -> dict[str, Any]:
+        states = pack_store.states()
+        connectors.actions()  # refreshes connectors.problems
+        out = []
+        on_disk = set()
+        for pk in pack_store.available():
+            on_disk.add(pk.id)
+            st = states.get(pk.id)
+            out.append({**pk.to_dict(), "installed": st is not None, "enabled": bool(st and st["enabled"]),
+                        "load_problem": connectors.problems.get(pk.id, "")})
+        for pid, st in states.items():  # installed, but its folder is gone: still listed, so it can be removed
+            if pid not in on_disk:
+                out.append({"id": pid, "name": pid, "version": "", "description": "", "readme": "", "roles": [],
+                            "teams": [], "connectors": [], "rules": [], "schedules": [], "installed": True,
+                            "enabled": st["enabled"], "load_problem": "",
+                            "problem": "its folder is missing from packs/: remove it, or put the folder back"})
+        return {"packs": out}
+
+    @app.post("/api/packs/{pack_id}/{action}")
+    async def pack_action(pack_id: str, action: str, request: Request):
+        try:
+            if action == "install":
+                result = packs_mod.install(pack_store, gate, schedule_store, pack_id)
+                return {"ok": True, **result}
+            if action == "enable":
+                body = await read_json(request) or {}
+                if not isinstance(body.get("enabled"), bool):
+                    return _bad("enabled must be true or false")
+                if pack_id not in pack_store.states():
+                    return _bad("this pack is not installed", 404)
+                if not body["enabled"]:
+                    busy = pack_busy(pack_id)
+                    if busy:
+                        return _bad(busy, 409)
+                else:
+                    clash = pack_store.clash(pack_id)  # never take over another pack's action (review M8)
+                    if clash:
+                        return _bad(f"it clashes with an action of another pack or of the app: {', '.join(clash)}", 409)
+                pack_store.set_enabled(pack_id, body["enabled"])
+                return {"ok": True}
+            if action == "remove":
+                busy = pack_busy(pack_id)
+                if busy:
+                    return _bad(busy, 409)
+                return {"ok": True, **packs_mod.remove(pack_store, gate, schedule_store, pack_id)}
+        except PackError as exc:
+            return _bad(str(exc), 409 if "already" in str(exc) or "not installed" in str(exc) else 400)
+        return _bad("unknown action", 404)
 
     return app
 

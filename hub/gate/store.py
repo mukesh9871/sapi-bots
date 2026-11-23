@@ -102,6 +102,11 @@ class GateStore:
                        (pack, platform, action, mode, daily_cap))
         return self.rule(pack, platform, action)
 
+    def delete_rules(self, pack: str) -> int:
+        """G-PACK-2: removing a pack removes its rules (never the activity log)."""
+        with closing(self._conn()) as db, db:
+            return db.execute("DELETE FROM rules WHERE pack = ?", (pack,)).rowcount
+
     # ---- activity log (G-LOG-1, N-REL-3) ------------------------------------------------
     def log(self, call_id: str, agent: str, pack: str, platform: str, action_id: str,
             payload: dict, decision: str, outcome: str = "", detail: str = "") -> None:

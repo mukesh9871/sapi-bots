@@ -122,8 +122,8 @@ The platform is one general engine: agents with roles, teams, tools, schedules a
 
 **Schedules and routines**
 
-1. **G-SCHED-1:** Any agent or team task can run on a schedule (daily, weekly, custom) or on a trigger (new file in a folder, a finished render).
-2. **G-SCHED-2:** Schedules run only while the PC and app are on; missed runs are listed, and I choose whether to run them late.
+1. **G-SCHED-1:** ✅ Any agent or team task can run on a schedule (daily, weekly, custom) or on a trigger (new file in a folder, a finished render).
+2. **G-SCHED-2:** ✅ Schedules run only while the PC and app are on; missed runs are listed, and I choose whether to run them late.
 
 **Log and budgets**
 
@@ -133,8 +133,8 @@ The platform is one general engine: agents with roles, teams, tools, schedules a
 
 **Instruction packs**
 
-1. **G-PACK-1:** A pack is a folder that bundles roles, a team template, the connectors it needs, default approval rules and default schedules for one type of work.
-2. **G-PACK-2:** Installing, switching off or removing a pack never changes the engine or other packs.
+1. **G-PACK-1:** ✅ A pack is a folder that bundles roles, a team template, the connectors it needs, default approval rules and default schedules for one type of work.
+2. **G-PACK-2:** ✅ Installing, switching off or removing a pack never changes the engine or other packs.
 
 ## Instruction packs (specific types)
 
@@ -362,8 +362,8 @@ Build in three phases, each usable on its own. Phase 1 is Milestones 1 to 4 (the
 
 **Milestone 8: Scheduler and pack format**
 
-- [ ] A scheduled task runs at its time; a missed run is listed.
-- [ ] A sample pack installs and removes without any change to the engine.
+- [x] A scheduled task runs at its time; a missed run is listed.
+- [x] A sample pack installs and removes without any change to the engine.
 
 **Milestone 9: Routine automation pack**
 

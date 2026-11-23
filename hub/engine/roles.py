@@ -15,6 +15,8 @@ One Markdown file per role in packs/local/roles/<id>.md:
 - G-TOOL-3: a role lists only tools from TOOL_CATALOG. A hand-edited file that lists
   anything else (for example Bash) is shown with a problem and never runs.
 - Each role works in its own folder projects/role-<id>/ (G-TEAM-6, N-SEC-5).
+- Milestone 8 (G-PACK-1): an installed pack adds read-only roles from packs/<pack>/roles/. Their
+  id is "<pack>.<role>", and their acting tools use the pack's approval rules.
 """
 
 from __future__ import annotations
@@ -49,6 +51,16 @@ DEFAULT_TURNS = 30  # G-BUDGET-1: a task's budget in turns, per message
 MAX_TURNS = 200
 MAX_INSTRUCTIONS = 20_000
 ID_RE = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")  # a role id is also part of a folder name
+FULL_ID_RE = re.compile(r"(?:[a-z0-9]+(?:-[a-z0-9]+)*\.)?[a-z0-9]+(?:-[a-z0-9]+)*")  # "writer" or "pack.writer"
+LOCAL = "local"  # the pack name of my own roles, teams and rules
+
+
+def split_id(full_id: object) -> tuple[str, str] | None:
+    """("local", "writer") or ("sample", "writer") for "sample.writer"; None for anything else."""
+    if not isinstance(full_id, str) or not FULL_ID_RE.fullmatch(full_id):
+        return None
+    pack, _, item = full_id.rpartition(".")
+    return (pack or LOCAL, item)
 
 
 def catalog() -> dict[str, dict[str, str]]:
@@ -73,6 +85,7 @@ class Role:
     instructions: str
     problem: str = ""  # set when a hand-edited file is not valid; such a role never runs
     max_turns: int = DEFAULT_TURNS  # G-BUDGET-1
+    pack: str = LOCAL  # G-PACK-1: which pack it comes from; its acting tools use that pack's rules
 
     @property
     def folder(self) -> Path:
@@ -81,7 +94,7 @@ class Role:
     def to_dict(self) -> dict:
         return {"id": self.id, "name": self.name, "model": self.model, "tools": list(self.tools),
                 "instructions": self.instructions, "problem": self.problem, "folder": str(self.folder),
-                "max_turns": self.max_turns}
+                "max_turns": self.max_turns, "pack": self.pack}
 
 
 def check(name: str, model: str, tools: list[str] | tuple[str, ...], instructions: str,
@@ -106,7 +119,7 @@ def check(name: str, model: str, tools: list[str] | tuple[str, ...], instruction
     return None
 
 
-def parse(role_id: str, text: str) -> Role:
+def parse(role_id: str, text: str, pack: str = LOCAL) -> Role:
     """Reads a role file. Never raises: a bad file gives a Role with `problem` set."""
     header: dict[str, str] = {}
     body = text
@@ -130,7 +143,7 @@ def parse(role_id: str, text: str) -> Role:
     closed = lines[0].strip() == "---" and "---" in (l.strip() for l in lines[1:])
     problem = "" if closed else "the file has no header (--- lines above and below it)"
     problem = problem or check(name, model, tools, instructions, max_turns) or ""
-    return Role(role_id, name, model, tools, instructions, problem, max_turns if max_turns > 0 else DEFAULT_TURNS)
+    return Role(role_id, name, model, tools, instructions, problem, max_turns if max_turns > 0 else DEFAULT_TURNS, pack)
 
 
 def dump(role: Role) -> str:
@@ -152,6 +165,8 @@ class RoleStore:
         # Ids still used elsewhere (the server adds the role ids of saved chats). A new role never
         # takes one, so a deleted role's chats and folder never pass to a new role (review M5).
         self.in_use: Callable[[], set[str]] = lambda: set()
+        # G-PACK-1: installed and switched-on packs, {pack id: pack folder}. Set by the server.
+        self.pack_dirs: Callable[[], dict[str, Path]] = lambda: {}
 
     def _taken(self) -> set[str]:
         files = {p.stem for p in self.folder.glob("*.md")} if self.folder.is_dir() else set()
@@ -165,19 +180,33 @@ class RoleStore:
         return self.folder / f"{role_id}.md" if isinstance(role_id, str) and ID_RE.fullmatch(role_id) else None
 
     def list(self) -> list[Role]:
-        if not self.folder.is_dir():
-            return []
-        roles = [self.get(p.stem) for p in sorted(self.folder.glob("*.md")) if ID_RE.fullmatch(p.stem)]
-        return sorted((r for r in roles if r), key=lambda r: r.name.lower())
+        ids = [p.stem for p in sorted(self.folder.glob("*.md"))] if self.folder.is_dir() else []
+        for pack, root in sorted(self.pack_dirs().items()):  # pack roles after mine (G-PACK-1)
+            folder = root / "roles"
+            ids += [f"{pack}.{p.stem}" for p in sorted(folder.glob("*.md"))] if folder.is_dir() else []
+        roles = [self.get(i) for i in ids if FULL_ID_RE.fullmatch(i)]
+        return sorted((r for r in roles if r), key=lambda r: (r.pack != LOCAL, r.pack, r.name.lower()))
+
+    def _file(self, role_id: str) -> tuple[Path, str] | None:
+        """The file of a role and its pack. A pack role is found only while its pack is on."""
+        parts = split_id(role_id)
+        if parts is None:
+            return None
+        pack, item = parts
+        if pack == LOCAL:
+            return (self.folder / f"{item}.md", pack) if "." not in role_id else None  # "local.x" is not an id
+        root = self.pack_dirs().get(pack)
+        return (root / "roles" / f"{item}.md", pack) if root else None
 
     def get(self, role_id: str) -> Role | None:
-        path = self._path(role_id)
-        if path is None or not path.is_file():
+        found = self._file(role_id)
+        if found is None or not found[0].is_file():
             return None
+        path, pack = found
         try:
-            return parse(role_id, path.read_text(encoding="utf-8-sig"))  # a BOM from Notepad is fine
+            return parse(role_id, path.read_text(encoding="utf-8-sig"), pack)  # a BOM from Notepad is fine
         except (OSError, UnicodeDecodeError) as exc:
-            return Role(role_id, role_id, "", (), "", f"cannot read the file ({type(exc).__name__})")
+            return Role(role_id, role_id, "", (), "", f"cannot read the file ({type(exc).__name__})", pack=pack)
 
     def _write(self, role: Role) -> None:
         self.folder.mkdir(parents=True, exist_ok=True)
@@ -194,6 +223,8 @@ class RoleStore:
             raise RoleError(problem)
         if role_id is None:
             role_id = make_id(name, self._taken())
+        elif self._path(role_id) is None:  # G-PACK-2: a pack's files are never changed by the app
+            raise RoleError("this role comes from a pack and cannot be changed: copy it first")
         elif self.get(role_id) is None:
             raise RoleError("this role no longer exists")
         # The CLI refuses to change a file the role has not read first, so Write and Edit bring Read.

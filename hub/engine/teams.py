@@ -17,6 +17,8 @@ One Markdown file per team in packs/local/teams/<id>.md:
 - members: the workers. A role may appear more than once (developer 1 and 2).
 - max_agents and max_turns are the team's budget (G-BUDGET-1).
 Roles are referenced by id; a team whose role was deleted or is broken cannot start.
+Milestone 8 (G-PACK-1): an installed pack adds read-only teams from packs/<pack>/teams/, with id
+"<pack>.<team>". In a pack's team file a plain role id means that pack's role.
 """
 
 from __future__ import annotations
@@ -26,7 +28,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
-from hub.engine.roles import ID_RE, MAX_NAME, Role, make_id
+from hub.engine.roles import FULL_ID_RE, ID_RE, LOCAL, MAX_NAME, Role, make_id, split_id
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 TEAMS_DIR = PROJECT_ROOT / "packs" / "local" / "teams"
@@ -52,11 +54,12 @@ class Team:
     max_turns: int = DEFAULT_TEAM_TURNS
     notes: str = ""
     problem: str = ""  # a hand edit made the file invalid; such a team never starts
+    pack: str = LOCAL  # G-PACK-1: which pack it comes from
 
     def to_dict(self) -> dict:
         return {"id": self.id, "name": self.name, "lead": self.lead, "reviewer": self.reviewer,
                 "members": list(self.members), "max_agents": self.max_agents, "max_turns": self.max_turns,
-                "notes": self.notes, "problem": self.problem}
+                "notes": self.notes, "problem": self.problem, "pack": self.pack}
 
 
 def _int(value: object, low: int, high: int) -> bool:
@@ -93,7 +96,7 @@ def check(name: str, lead: str, reviewer: str, members: list[str] | tuple[str, .
     return None
 
 
-def parse(team_id: str, text: str, role_ok: Callable[[str], str | None]) -> Team:
+def parse(team_id: str, text: str, role_ok: Callable[[str], str | None], pack: str = LOCAL) -> Team:
     """Reads a team file. Never raises: a bad file gives a Team with `problem` set."""
     header: dict[str, str] = {}
     lines = text.replace("\r\n", "\n").split("\n")
@@ -111,14 +114,18 @@ def parse(team_id: str, text: str, role_ok: Callable[[str], str | None]) -> Team
         raw = header.get(key, "") or str(default)
         return int(raw) if raw.isascii() and raw.isdigit() and len(raw) < 6 else -1
 
+    def resolve(rid: str) -> str:  # in a pack's file, "writer" means that pack's writer
+        return f"{pack}.{rid}" if pack != LOCAL and rid and "." not in rid else rid
+
     name = header.get("name", "") or team_id
-    lead, reviewer = header.get("lead", ""), header.get("reviewer", "")
-    members = tuple(m.strip() for m in header.get("members", "").split(",") if m.strip())
+    lead, reviewer = resolve(header.get("lead", "")), resolve(header.get("reviewer", ""))
+    members = tuple(resolve(m.strip()) for m in header.get("members", "").split(",") if m.strip())
     agents, turns = number("max_agents", DEFAULT_AGENTS), number("max_turns", DEFAULT_TEAM_TURNS)
     notes = body.strip()
     problem = "" if closed else "the file has no header (--- lines above and below it)"
     problem = problem or check(name, lead, reviewer, members, agents, turns, notes, role_ok) or ""
-    return Team(team_id, name, lead, reviewer, members, max(agents, 1), max(turns, MIN_TEAM_TURNS), notes, problem)
+    return Team(team_id, name, lead, reviewer, members, max(agents, 1), max(turns, MIN_TEAM_TURNS), notes, problem,
+                pack)
 
 
 def dump(team: Team) -> str:
@@ -131,9 +138,10 @@ class TeamStore:
     def __init__(self, folder: Path | None = None, roles_get: Callable[[str], Role | None] = lambda _id: None):
         self.folder = folder or TEAMS_DIR
         self.roles_get = roles_get  # the server passes RoleStore.get
+        self.pack_dirs: Callable[[], dict[str, Path]] = lambda: {}  # G-PACK-1, set by the server
 
     def role_ok(self, role_id: str) -> str | None:
-        if not isinstance(role_id, str) or not ID_RE.fullmatch(role_id):
+        if not isinstance(role_id, str) or not FULL_ID_RE.fullmatch(role_id):
             return "not a role id"
         role = self.roles_get(role_id)
         if role is None:
@@ -144,19 +152,32 @@ class TeamStore:
         return self.folder / f"{team_id}.md" if isinstance(team_id, str) and ID_RE.fullmatch(team_id) else None
 
     def list(self) -> list[Team]:
-        if not self.folder.is_dir():
-            return []
-        teams = [self.get(p.stem) for p in sorted(self.folder.glob("*.md")) if ID_RE.fullmatch(p.stem)]
-        return sorted((t for t in teams if t), key=lambda t: t.name.lower())
+        ids = [p.stem for p in sorted(self.folder.glob("*.md"))] if self.folder.is_dir() else []
+        for pack, root in sorted(self.pack_dirs().items()):  # pack teams after mine (G-PACK-1)
+            folder = root / "teams"
+            ids += [f"{pack}.{p.stem}" for p in sorted(folder.glob("*.md"))] if folder.is_dir() else []
+        teams = [self.get(i) for i in ids if FULL_ID_RE.fullmatch(i)]
+        return sorted((t for t in teams if t), key=lambda t: (t.pack != LOCAL, t.pack, t.name.lower()))
+
+    def _file(self, team_id: str) -> tuple[Path, str] | None:
+        parts = split_id(team_id)
+        if parts is None:
+            return None
+        pack, item = parts
+        if pack == LOCAL:
+            return (self.folder / f"{item}.md", pack) if "." not in team_id else None
+        root = self.pack_dirs().get(pack)
+        return (root / "teams" / f"{item}.md", pack) if root else None
 
     def get(self, team_id: str) -> Team | None:
-        path = self._path(team_id)
-        if path is None or not path.is_file():
+        found = self._file(team_id)
+        if found is None or not found[0].is_file():
             return None
+        path, pack = found
         try:
-            return parse(team_id, path.read_text(encoding="utf-8-sig"), self.role_ok)
+            return parse(team_id, path.read_text(encoding="utf-8-sig"), self.role_ok, pack)
         except (OSError, UnicodeDecodeError) as exc:
-            return Team(team_id, team_id, "", "", (), problem=f"cannot read the file ({type(exc).__name__})")
+            return Team(team_id, team_id, "", "", (), problem=f"cannot read the file ({type(exc).__name__})", pack=pack)
 
     def save(self, team_id: str | None, name: str, lead: str, reviewer: str, members: list[str],
              max_agents: int = DEFAULT_AGENTS, max_turns: int = DEFAULT_TEAM_TURNS, notes: str = "") -> Team:
@@ -167,6 +188,8 @@ class TeamStore:
         if team_id is None:
             taken = {p.stem.lower() for p in self.folder.glob("*.md")} if self.folder.is_dir() else set()
             team_id = make_id(name, taken)
+        elif self._path(team_id) is None:  # G-PACK-2: a pack's files are never changed by the app
+            raise TeamError("this team comes from a pack and cannot be changed")
         elif self.get(team_id) is None:
             raise TeamError("this team no longer exists")
         team = Team(team_id, name.strip(), lead, reviewer, tuple(members), max_agents, max_turns, notes.strip())
@@ -192,7 +215,8 @@ def member_keys(team: Team) -> list[tuple[str, str]]:
         out.append(("reviewer", team.reviewer))
     used = {k for k, _ in out}
     for rid in team.members:
-        base = rid if rid not in ("lead", "reviewer") else f"member-{rid}"  # never clash with the lead's key
+        short = rid.rpartition(".")[2]  # "sample.writer" is "writer" on the board
+        base = short if short not in ("lead", "reviewer") else f"member-{short}"  # never clash with the lead's key
         key, n = base, 1
         while key in used:  # also covers a real role id "member-lead" next to a worker "lead"
             n += 1

@@ -604,7 +604,7 @@ def test_inbox_api_approve_edit_reject(hub, outbox):  # G-APPR-2
     items = call(port, "GET", "/api/approvals")[1]["items"]
     assert [i["payload"]["text"] for i in items] == ["one", "two"]
     assert "one" in items[0]["preview"] and "text" in items[0]["fields"]
-    assert call(port, "GET", "/api/gate/summary")[1] == {"pending": 2, "paused": False}
+    assert call(port, "GET", "/api/gate/summary")[1] == {"pending": 2, "paused": False, "missed": 0}
     st, out = call(port, "POST", f"/api/approvals/{items[0]['id']}/approve", {"payload": {"title": "T", "text": "one!"}})
     assert st == 200 and out["ok"] and out["edited"] and "one!" in outbox.read_text(encoding="utf-8")
     assert call(port, "POST", f"/api/approvals/{items[0]['id']}/approve", {})[0] == 409  # never twice

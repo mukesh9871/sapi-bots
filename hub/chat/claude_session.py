@@ -245,12 +245,13 @@ def outside_folder(tool: str, tool_input: dict[str, Any], folder: Path) -> str |
     return None
 
 
-def _gated_tool(action: Any, gate: Any, agent: str) -> Any:
+def _gated_tool(action: Any, gate: Any, agent: str, pack: str = "local") -> Any:
     """An in-process tool for one connector action. It never acts by itself: the approval
     gate decides (Auto, Ask, Never, cap, pause), runs and logs it (G-APPR-1, G-LOG-1)."""
     @tool(f"{action.connector}_{action.name}", action.description, action.schema())
     async def handler(args: dict[str, Any]) -> dict[str, Any]:
-        result = await asyncio.to_thread(gate.call, action.id, args, agent)  # SQLite + connector: off the loop
+        # G-PACK-1: a pack role's actions follow that pack's rules ("local" for my own roles).
+        result = await asyncio.to_thread(gate.call, action.id, args, agent, pack)  # SQLite + connector: off the loop
         return {"content": [{"type": "text", "text": result.text}], "is_error": result.is_error}
     return handler
 
@@ -289,7 +290,7 @@ def build_options(
         if acts and gate is None:
             raise ValueError("acting tools need the approval gate")  # never run them ungated
         if acts:
-            servers["hub"] = create_sdk_mcp_server("hub", tools=[_gated_tool(a, gate, role.name) for a in acts])
+            servers["hub"] = create_sdk_mcp_server("hub", tools=[_gated_tool(a, gate, role.name, role.pack) for a in acts])
         if team_tools:
             servers["team"] = create_sdk_mcp_server("team", tools=list(team_tools))
         allowed = builtin + [a.tool_name for a in acts] + [f"mcp__team__{t.name}" for t in team_tools]

@@ -19,6 +19,9 @@
       <button type="button" id="open-approvals" class="ghost" title="Actions waiting for your approval">Approvals <span id="approvals-badge" class="badge" hidden>0</span></button>
       <button type="button" id="open-activity" class="ghost" title="Everything done on your behalf">Activity log</button>
       <button type="button" id="open-teams" class="ghost" title="Teams of roles that work on a task together">Teams</button>
+      <!-- Milestone 8: schedules and triggers (G-SCHED-1, G-SCHED-2), packs (G-PACK-1, G-PACK-2) -->
+      <button type="button" id="open-schedules" class="ghost" title="Tasks that run on a schedule or a trigger">Schedules <span id="missed-badge" class="badge" hidden>0</span></button>
+      <button type="button" id="open-packs" class="ghost" title="Install, switch off or remove instruction packs">Packs</button>
       <input type="search" id="search" placeholder="Search chats" aria-label="Search chats">
       <ul id="chat-list" aria-label="Past chats"></ul>
       <div id="chat-list-empty" class="muted small" hidden>No chats yet.</div>
@@ -179,6 +182,7 @@
       </div>
       <form id="role-form" method="dialog">
         <div id="role-problem" class="error-text" hidden></div>
+        <div id="role-pack-note" class="hint" hidden></div>
         <label class="block">Name <input id="role-name" maxlength="40" required></label>
         <label class="block">Model
           <select id="role-model">
@@ -238,6 +242,76 @@
   </dialog>
 
   <!-- Teams (Milestone 7): templates (G-TEAM-1, G-TEAM-2) and the board of a run (G-TEAM-4, G-TEAM-5) -->
+  <!-- Milestone 8: schedules (G-SCHED-1) and missed runs (G-SCHED-2) -->
+  <dialog id="schedules-dialog" class="huge">
+    <div class="roles-layout">
+      <div class="roles-side">
+        <h2>Schedules</h2>
+        <ul id="schedule-list" aria-label="Schedules"></ul>
+        <div id="schedule-list-empty" class="muted small">No schedules yet.</div>
+        <button type="button" id="schedule-new">+ New schedule</button>
+        <h3>Missed runs</h3>
+        <ul id="missed-list" class="missed" aria-label="Missed runs"></ul>
+        <div id="missed-empty" class="muted small">Nothing missed.</div>
+      </div>
+      <form id="schedule-form" method="dialog" class="team-main">
+        <label class="block">Name <input id="sch-name" maxlength="60" required></label>
+        <div class="row">
+          <label>Run <select id="sch-kind"><option value="role">a role</option><option value="team">a team</option></select></label>
+          <label><span id="sch-target-label">Role</span> <select id="sch-target" required></select></label>
+        </div>
+        <label class="block">Task
+          <textarea id="sch-task" rows="3" maxlength="20000" required placeholder="What it should do each time."></textarea>
+        </label>
+        <fieldset>
+          <legend>When</legend>
+          <div class="row">
+            <select id="sch-type">
+              <option value="daily">Every day</option>
+              <option value="weekly">On chosen days</option>
+              <option value="interval">Every few minutes or hours</option>
+              <option value="file">When a new file appears in a folder</option>
+              <option value="after">After another schedule finishes</option>
+            </select>
+            <label id="sch-time-box">at <input id="sch-time" type="time" value="08:00"></label>
+            <label id="sch-minutes-box" hidden>every <input id="sch-minutes" type="number" min="5" max="10080" value="60" class="short"> minutes</label>
+            <select id="sch-after" hidden></select>
+          </div>
+          <div id="sch-days" class="days" hidden></div>
+          <label id="sch-folder-box" class="block" hidden>Folder (full path) <input id="sch-folder" maxlength="400" placeholder="C:\Users\me\Inbox"></label>
+          <p class="hint">Runs happen only while the app is on. A run that comes due while the app is off or paused is listed under Missed runs.</p>
+        </fieldset>
+        <div id="sch-error" class="error-text" hidden></div>
+        <menu>
+          <button type="button" id="sch-delete" class="danger">Delete</button>
+          <span class="spacer"></span>
+          <button type="submit" id="sch-save">Save schedule</button>
+        </menu>
+        <fieldset id="sch-status-box">
+          <legend>Status</legend>
+          <label class="check"><input type="checkbox" id="sch-enabled"> Switched on</label>
+          <div id="sch-status" class="muted small"></div>
+          <menu>
+            <button type="button" id="sch-run" class="ghost">Run now</button>
+            <button type="button" id="sch-stop" class="danger" hidden>Stop</button>
+          </menu>
+          <details><summary>Recent runs</summary><ul id="sch-runs" class="events"></ul></details>
+        </fieldset>
+      </form>
+    </div>
+    <menu><button type="button" id="schedules-close" class="ghost">Close</button></menu>
+  </dialog>
+
+  <!-- Milestone 8: instruction packs (G-PACK-1, G-PACK-2) -->
+  <dialog id="packs-dialog" class="wide">
+    <h2>Packs</h2>
+    <p class="hint">A pack adds roles, teams, connectors, suggested approval rules and schedules for one type of work.
+      Installing, switching off or removing a pack never changes the app itself or another pack.
+      A pack's connectors are code that runs with the app's rights: install only packs you trust.</p>
+    <div id="pack-list"></div>
+    <div id="pack-list-empty" class="muted small" hidden>No packs found in the packs folder.</div>
+    <menu><button type="button" id="packs-close" class="ghost">Close</button></menu>
+  </dialog>
   <dialog id="teams-dialog" class="huge">
     <div class="roles-layout">
       <div class="roles-side">
@@ -251,6 +325,7 @@
 
       <form id="team-form" method="dialog" class="team-main">
         <div id="team-problem" class="error-text" hidden></div>
+        <div id="team-pack-note" class="hint" hidden></div>
         <label class="block">Name <input id="team-name" maxlength="40" required></label>
         <div class="row">
           <label>Lead <select id="team-lead" required></select></label>
