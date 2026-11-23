@@ -174,9 +174,9 @@ Roles: trend analyst, content writer, publisher, analytics reporter.
 
 ### Pack 3: Routine automation
 
-1. **P-ROUT-1:** I describe a repeated activity in plain words; the bot turns it into a routine with steps, a schedule and an approval rule.
-2. **P-ROUT-2:** Starter routines: morning briefing, weekly analytics summary, reminders, tidying one folder I choose.
-3. **P-ROUT-3:** Each routine shows its last run, result and next run.
+1. **P-ROUT-1:** ✅ I describe a repeated activity in plain words; the bot turns it into a routine with steps, a schedule and an approval rule.
+2. **P-ROUT-2:** ✅ Starter routines: morning briefing, weekly analytics summary, reminders, tidying one folder I choose.
+3. **P-ROUT-3:** ✅ Each routine shows its last run, result and next run.
 
 ### Pack 4: Software team
 
@@ -367,7 +367,7 @@ Build in three phases, each usable on its own. Phase 1 is Milestones 1 to 4 (the
 
 **Milestone 9: Routine automation pack**
 
-- [ ] A routine described in plain words runs on schedule for a week.
+- [ ] A routine described in plain words runs on schedule for a week. (Built and tested, including a simulated week. The real week of use is still to do.)
 
 **Milestone 10: Social media manager pack**
 

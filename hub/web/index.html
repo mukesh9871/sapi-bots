@@ -255,14 +255,23 @@
         <div id="missed-empty" class="muted small">Nothing missed.</div>
       </div>
       <form id="schedule-form" method="dialog" class="team-main">
+        <!-- Milestone 9, P-ROUT-1: describe a routine in plain words; the hub drafts it, I check and save -->
+        <fieldset id="sch-draft-box">
+          <legend>Describe a routine in plain words</legend>
+          <textarea id="sch-words" rows="2" maxlength="4000" placeholder="For example: every weekday at 8 give me a short news briefing about AI and tell me when it is ready."></textarea>
+          <menu><button type="button" id="sch-draft" class="ghost">Draft it</button></menu>
+          <div id="sch-draft-note" class="hint" hidden></div>
+        </fieldset>
         <label class="block">Name <input id="sch-name" maxlength="60" required></label>
         <div class="row">
           <label>Run <select id="sch-kind"><option value="role">a role</option><option value="team">a team</option></select></label>
           <label><span id="sch-target-label">Role</span> <select id="sch-target" required></select></label>
         </div>
+        <div id="sch-can" class="hint"></div>
         <label class="block">Task
           <textarea id="sch-task" rows="3" maxlength="20000" required placeholder="What it should do each time."></textarea>
         </label>
+        <label class="check"><input type="checkbox" id="sch-notify"> Tell me in the window when it is done (for reminders and briefings)</label>
         <fieldset>
           <legend>When</legend>
           <div class="row">

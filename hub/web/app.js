@@ -872,6 +872,7 @@ async function refreshGate() {
     els.approvalsBadge.textContent = g.pending; els.approvalsBadge.hidden = !g.pending;
     showPause(g.paused);
     showMissedBadge(g.missed || 0);
+    showNotices(g.notice || 0);
   } catch { /* the status line reports a dead server */ }
 }
 function showPause(p) {
@@ -1215,6 +1216,16 @@ function fillTargets(kind, value) {
     o.textContent = x.pack && x.pack !== "local" ? `${x.name} (${x.pack})` : x.name; return o;
   }));
   if (value) $("sch-target").value = value;
+  showCan();
+}
+
+const MODE_LABELS = { ask: "asks you first", auto: "runs by itself (Auto)", never: "never" };
+function showCan() { // P-ROUT-1: which outside actions it may take, and the rule each follows
+  const role = $("sch-kind").value === "role" ? schTargets.roles.find((x) => x.id === $("sch-target").value) : null;
+  const can = role ? role.can || [] : [];
+  $("sch-can").textContent = !role ? "Each member of the team follows its own approval rules."
+    : can.length ? `It may: ${can.map((c) => `${c.label} (${MODE_LABELS[c.mode] || c.mode})`).join("; ")}. Change rules in Settings.`
+    : "It takes no outside actions.";
 }
 
 async function loadSchedules() {
@@ -1262,6 +1273,9 @@ function editSchedule(id) {
   $("sch-kind").value = x ? x.kind : "role";
   fillTargets($("sch-kind").value, x ? x.target : null);
   $("sch-task").value = x ? x.task : "";
+  $("sch-notify").checked = x ? x.notify : false;
+  $("sch-draft-box").hidden = !!x; $("sch-draft-note").hidden = true;
+  if (!x) $("sch-words").value = "";
   const spec = x ? x.spec : { type: "daily", time: "08:00" };
   $("sch-type").value = spec.type;
   $("sch-time").value = spec.time || "08:00";
@@ -1313,7 +1327,8 @@ function scheduleBody() {
   if (type === "interval") spec.minutes = Number($("sch-minutes").value);
   if (type === "file") spec.folder = $("sch-folder").value;
   if (type === "after") spec.schedule = Number($("sch-after").value);
-  return { name: $("sch-name").value, kind: $("sch-kind").value, target: $("sch-target").value, task: $("sch-task").value, spec };
+  return { name: $("sch-name").value, kind: $("sch-kind").value, target: $("sch-target").value, task: $("sch-task").value, spec,
+    notify: $("sch-notify").checked };
 }
 
 async function refreshSchedules() {
@@ -1334,6 +1349,34 @@ async function openSchedules() {
 
 $("sch-type").onchange = showWhenFields;
 $("sch-kind").onchange = () => fillTargets($("sch-kind").value, null);
+$("sch-target").onchange = showCan;
+$("sch-notify").onchange = () => { // a desktop notice too, if the browser allows it
+  try { if ($("sch-notify").checked && "Notification" in window && Notification.permission === "default") Notification.requestPermission(); }
+  catch { /* the window message is enough */ }
+};
+$("sch-draft").onclick = async () => { // P-ROUT-1: plain words to a draft; never saved without me
+  const text = $("sch-words").value.trim();
+  if (!text) return;
+  const note = $("sch-draft-note");
+  note.hidden = false; note.textContent = "Drafting…"; $("sch-draft").disabled = true;
+  try {
+    const { draft } = await api("POST", "/api/schedules/draft", { text });
+    editSchedule(null);
+    $("sch-words").value = text;
+    $("sch-name").value = draft.name; $("sch-kind").value = draft.kind;
+    fillTargets(draft.kind, draft.target || null);
+    $("sch-task").value = draft.task; $("sch-notify").checked = draft.notify;
+    const spec = draft.spec;
+    $("sch-type").value = spec.type; $("sch-time").value = spec.time || "08:00";
+    for (const cb of $("sch-days").querySelectorAll("input")) cb.checked = (spec.days || []).includes(cb.value);
+    $("sch-minutes").value = spec.minutes || 60;
+    showWhenFields();
+    note.hidden = false;
+    note.textContent = "Drafted. Check who does it, the task and the time, then press Save schedule."
+      + (draft.problems.length ? ` Please fix: ${draft.problems.join("; ")}.` : "");
+  } catch (err) { note.textContent = `Could not draft it: ${err.message}.`; }
+  finally { $("sch-draft").disabled = false; }
+};
 $("schedule-new").onclick = () => editSchedule(null);
 $("schedule-form").onsubmit = async (e) => {
   e.preventDefault();
@@ -1351,6 +1394,9 @@ $("sch-delete").onclick = async () => {
   catch (err) { flash(`Could not delete: ${err.message}.`, true); }
 };
 $("sch-enabled").onchange = async () => {
+  const x = schedules.find((s) => s.id === editingSchedule);
+  try { if ($("sch-enabled").checked && x && x.notify && "Notification" in window && Notification.permission === "default") Notification.requestPermission(); }
+  catch { /* the window message is enough */ }
   try { await api("POST", `/api/schedules/${editingSchedule}/enable`, { enabled: $("sch-enabled").checked }); }
   catch (err) { flash(`Could not change it: ${err.message}.`, true); }
   refreshSchedules();
@@ -1398,7 +1444,25 @@ async function loadPacks() {
         if (confirm(`Remove ${pk.name}? Its roles, teams and connectors disappear, and its approval rules, schedules and waiting approvals are deleted. Its files in the packs folder, your chats and the activity log are kept.`)) packAction(pk, "remove");
       });
     }
-    card.append(head, desc, has, rules, problem, readme, menu); return card;
+    const settings = document.createElement("div"); // Milestone 9: settings I fill in, for example a folder
+    if (pk.installed && pk.settings && pk.settings.length) {
+      const fs = document.createElement("fieldset"); const lg = document.createElement("legend"); lg.textContent = "Settings"; fs.append(lg);
+      const inputs = {};
+      for (const st of pk.settings) {
+        const l = document.createElement("label"); l.className = "block"; l.textContent = st.label + " ";
+        const inp = document.createElement("input"); inp.value = (pk.values || {})[st.key] || ""; inp.maxLength = 400;
+        if (st.type === "folder") inp.placeholder = "C:\\Users\\me\\Downloads";
+        inputs[st.key] = inp; l.append(inp); fs.append(l);
+      }
+      const save = document.createElement("button"); save.type = "button"; save.className = "ghost"; save.textContent = "Save settings";
+      save.onclick = async () => {
+        const values = Object.fromEntries(Object.entries(inputs).map(([k, i]) => [k, i.value]));
+        try { await api("POST", `/api/packs/${encodeURIComponent(pk.id)}/settings`, { values }); flash("Settings saved."); }
+        catch (err) { flash(`Could not save: ${err.message}.`, true); }
+      };
+      fs.append(save); settings.append(fs);
+    }
+    card.append(head, desc, has, rules, problem, settings, readme, menu); return card;
   }));
   $("pack-list-empty").hidden = packs.length > 0;
 }
@@ -1420,6 +1484,34 @@ $("open-packs").onclick = async () => {
   $("packs-dialog").showModal();
 };
 $("packs-close").onclick = () => $("packs-dialog").close();
+
+// Milestone 9: a "tell me" schedule (reminder, briefing) shows its result when it is done.
+let lastNotice = null, noticeBusy = false;
+function storedNotice() { // null = this browser never kept a cursor (0 is a real cursor)
+  try { const v = localStorage.getItem("hub-last-notice"); return v === null ? null : Number(v) || 0; } catch { return null; }
+}
+function keepNotice(n) { lastNotice = n; try { localStorage.setItem("hub-last-notice", String(n)); } catch { /* fine */ } }
+async function showNotices(latest) {
+  if (noticeBusy) return; // one at a time: the 5 s timer and other callers never show a notice twice
+  noticeBusy = true;
+  try {
+    if (lastNotice === null) { const kept = storedNotice(); keepNotice(kept === null ? latest : kept); }
+    if (latest < lastNotice) keepNotice(0); // a new hub.db counts from 1 again: start over, never stay stuck
+    if (latest <= lastNotice) return;
+    const { notices } = await api("GET", `/api/notices?after=${lastNotice}`);
+    if (!notices.length) { keepNotice(latest); return; }
+    const lines = notices.map((n) => `${n.name}: ${n.status === "done" ? (n.result || "done").slice(0, 300) : `did not finish: ${n.reason || n.result || n.status}`}`);
+    // every notice of a batch stays readable together
+    flash(lines.slice(-3).join("  |  ") + (lines.length > 3 ? `  (and ${lines.length - 3} more in Schedules)` : ""),
+      notices.some((n) => n.status !== "done"));
+    for (const n of notices) {
+      try { if ("Notification" in window && Notification.permission === "granted") new Notification(n.name, { body: (n.result || n.reason || "").slice(0, 200) }); }
+      catch { /* the window message is enough */ }
+    }
+    keepNotice(notices[notices.length - 1].id);
+  } catch { /* next time */ }
+  finally { noticeBusy = false; }
+}
 
 // The missed badge shows at start-up too, so a missed run is never hidden (G-SCHED-2).
 api("GET", "/api/schedules").then((d) => showMissedBadge(d.missed.length)).catch(() => {});

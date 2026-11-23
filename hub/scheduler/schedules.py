@@ -61,6 +61,18 @@ CREATE TABLE IF NOT EXISTS schedule_runs (
     extra TEXT NOT NULL DEFAULT ''       -- a missed file trigger: the files it was about
 );
 CREATE INDEX IF NOT EXISTS schedule_runs_by_schedule ON schedule_runs (schedule_id, id);
+-- Milestone 9: what a "tell me" schedule finished, in the order runs finished. AUTOINCREMENT: an id is
+-- never used twice, even after a schedule or a pack is deleted, so the window's cursor never skips one.
+CREATE TABLE IF NOT EXISTS notices (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id INTEGER NOT NULL,
+    schedule_id INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    status TEXT NOT NULL,
+    result TEXT NOT NULL DEFAULT '',
+    reason TEXT NOT NULL DEFAULT '',
+    ended_at REAL NOT NULL
+);
 """
 
 
@@ -178,6 +190,10 @@ class ScheduleStore:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with closing(self._conn()) as db, db:
             db.executescript(SCHEMA)
+            try:  # Milestone 9: tell me in the window when a run is done (reminders)
+                db.execute("ALTER TABLE schedules ADD COLUMN notify INTEGER NOT NULL DEFAULT 0")
+            except sqlite3.OperationalError:
+                pass  # already there
 
     def _conn(self) -> sqlite3.Connection:
         db = sqlite3.connect(self.path, timeout=10)
@@ -190,24 +206,26 @@ class ScheduleStore:
         d["spec"] = json.loads(d["spec"])
         d["state"] = json.loads(d["state"])
         d["enabled"] = bool(d["enabled"])
+        d["notify"] = bool(d.get("notify"))
         return d
 
     # schedules
     def add(self, name: str, kind: str, target: str, task: str, spec: dict[str, Any], enabled: bool = True,
-            pack: str = "local", pack_key: str | None = None, now: float | None = None) -> dict[str, Any]:
+            pack: str = "local", pack_key: str | None = None, now: float | None = None,
+            notify: bool = False) -> dict[str, Any]:
         spec = check_spec(spec)
         self._check(name, kind, target, task)
         now = time.time() if now is None else now
         nxt = next_run(spec, now) if enabled else None
         with closing(self._conn()) as db, db:
             cur = db.execute("INSERT INTO schedules (name, pack, pack_key, kind, target, task, spec, enabled, next_run, "
-                             "created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                             "created_at, notify) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                              (name.strip(), pack, pack_key, kind, target, task.strip(), json.dumps(spec), int(enabled),
-                              nxt, now))
+                              nxt, now, int(bool(notify))))
             return self.get(cur.lastrowid, db)
 
     def update(self, sid: int, name: str, kind: str, target: str, task: str, spec: dict[str, Any],
-               now: float | None = None) -> dict[str, Any]:
+               now: float | None = None, notify: bool | None = None) -> dict[str, Any]:
         spec = check_spec(spec)
         self._check(name, kind, target, task)
         old = self.get(sid)
@@ -218,8 +236,9 @@ class ScheduleStore:
         state = old["state"] if old["spec"] == spec else {}  # a new folder starts with a new baseline
         with closing(self._conn()) as db, db:
             db.execute("UPDATE schedules SET name = ?, kind = ?, target = ?, task = ?, spec = ?, next_run = ?, "
-                       "state = ? WHERE id = ?", (name.strip(), kind, target, task.strip(), json.dumps(spec), nxt,
-                                                  json.dumps(state), sid))
+                       "state = ?, notify = ? WHERE id = ?",
+                       (name.strip(), kind, target, task.strip(), json.dumps(spec), nxt, json.dumps(state),
+                        int(old["notify"] if notify is None else bool(notify)), sid))
         return self.get(sid)
 
     @staticmethod
@@ -301,9 +320,17 @@ class ScheduleStore:
 
     def end_run(self, run_id: int, status: str, result: str = "", reason: str = "", ref: str = "") -> None:
         with closing(self._conn()) as db, db:
-            db.execute("UPDATE schedule_runs SET status = ?, result = ?, reason = ?, ref = ?, ended_at = ? "
-                       "WHERE id = ? AND status = 'running'",
-                       (status, result[-MAX_RESULT:], reason[:500], ref, time.time(), run_id))
+            now = time.time()
+            ended = db.execute("UPDATE schedule_runs SET status = ?, result = ?, reason = ?, ref = ?, ended_at = ? "
+                               "WHERE id = ? AND status = 'running'",
+                               (status, result[-MAX_RESULT:], reason[:500], ref, now, run_id)).rowcount
+            if ended and status in ("done", "failed", "budget"):
+                # A notice only for a run that ends while "tell me" is on (review M9: ticking it later
+                # must not bring back old results).
+                db.execute("INSERT INTO notices (run_id, schedule_id, name, status, result, reason, ended_at) "
+                           "SELECT r.id, s.id, s.name, ?, ?, ?, ? FROM schedule_runs r JOIN schedules s "
+                           "ON s.id = r.schedule_id WHERE r.id = ? AND s.notify = 1",
+                           (status, result[-2000:], reason[:500], now, run_id))
 
     def note_run(self, sid: int, due_at: float, status: str, reason: str, extra: str = "") -> int:
         """A run that did not happen: missed (G-SCHED-2) or skipped. Repeated misses of one schedule
@@ -346,6 +373,17 @@ class ScheduleStore:
         with closing(self._conn()) as db, db:
             return bool(db.execute("UPDATE schedule_runs SET status = ? WHERE id = ? AND status = 'missed'",
                                    (status, run_id)).rowcount)
+
+    def notices(self, after: int = 0, limit: int = 20) -> list[dict[str, Any]]:
+        """Finished runs of schedules that tell me (notify), newer than run id `after`."""
+        with closing(self._conn()) as db:
+            return [dict(r) for r in db.execute("SELECT * FROM notices WHERE id > ? ORDER BY id LIMIT ?",
+                                                (after, limit))]
+
+    def last_notice(self) -> int:
+        with closing(self._conn()) as db:
+            row = db.execute("SELECT MAX(id) FROM notices").fetchone()
+        return row[0] or 0
 
     def last_run(self, sid: int) -> dict[str, Any] | None:
         with closing(self._conn()) as db:

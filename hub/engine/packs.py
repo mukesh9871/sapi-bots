@@ -7,7 +7,8 @@ A pack is a folder in packs/<id>/ that bundles one type of work:
     packs/<id>/teams/*.md       team templates (a plain role id means this pack's role)
     packs/<id>/connectors/*.py  connectors (modules that list ACTIONS, as in hub/connectors/)
     packs/<id>/rules.md         suggested approval rules, one per line: "<action id>: ask|never|auto [cap N]"
-    packs/<id>/schedules/*.md   default schedules (header: name, run, when; the body is the task)
+    packs/<id>/schedules/*.md   default schedules (header: name, run, when, notify; the body is the task)
+    packs/<id>/settings.md      settings I fill in on the Packs page, one per line: "<key> | folder|text | <label>"
 
 Installing records the pack in data/hub.db. While it is on, its roles, teams and connectors
 appear (ids "<pack>.<role>"), read-only. Its rules are created as Ask or Never: a suggested
@@ -20,6 +21,8 @@ keeps every entry. None of this changes the engine or another pack (G-PACK-2).
 from __future__ import annotations
 
 import json
+import os
+import re
 import sqlite3
 import time
 from contextlib import closing
@@ -33,6 +36,23 @@ from hub.scheduler.schedules import ScheduleError, ScheduleStore, parse_when
 
 PACKS_DIR = PROJECT_ROOT / "packs"
 RESERVED = {LOCAL}  # packs/local holds my own roles and teams, it is not a pack
+SETTING_RE = re.compile(r"[a-z][a-z0-9_]{0,39}")
+SETTING_TYPES = ("folder", "text")
+MAX_SETTING = 400
+active: "PackStore | None" = None  # the app's store, so a pack connector can read its settings (setting())
+
+
+def _remote_drive(folder: Path) -> bool:
+    """True for a mapped network drive (Windows DRIVE_REMOTE). Asks Windows about the letter only."""
+    if os.name != "nt" or not folder.drive or not folder.drive.endswith(":"):
+        return False
+    import ctypes
+    return ctypes.windll.kernel32.GetDriveTypeW(folder.drive + "\\") == 4  # DRIVE_REMOTE
+
+
+def setting(pack_id: str, key: str) -> str:
+    """A pack setting I filled in on the Packs page ("" if not set). Pack connectors call this."""
+    return (active.settings(pack_id).get(key, "") if active else "") or ""
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS packs (
@@ -74,13 +94,14 @@ class Pack:
     connectors: list[str] = field(default_factory=list)
     rules: list[dict[str, Any]] = field(default_factory=list)  # {"action", "mode", "cap"}
     schedules: list[dict[str, Any]] = field(default_factory=list)  # {"key", "name", "kind", "target", "spec", "task"}
+    settings: list[dict[str, str]] = field(default_factory=list)  # {"key", "type", "label"} (Milestone 9)
     problem: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {"id": self.id, "name": self.name, "version": self.version, "description": self.description,
                 "readme": self.readme, "roles": self.roles, "teams": self.teams, "connectors": self.connectors,
                 "rules": self.rules, "schedules": [{k: v for k, v in s.items() if k != "task"} for s in self.schedules],
-                "problem": self.problem}
+                "settings": self.settings, "problem": self.problem}
 
 
 def read_pack(pack_id: str, path: Path) -> Pack:
@@ -152,7 +173,18 @@ def read_pack(pack_id: str, path: Path) -> Pack:
                 problems.append(f"schedules/{f.name}: {exc}")
                 continue
             pack.schedules.append({"key": f.stem, "name": name, "kind": kind, "target": target, "spec": spec,
-                                   "task": task})
+                                   "task": task, "notify": head.get("notify", "").lower() in ("yes", "true")})
+    settings_file = path / "settings.md"
+    settings_text = read(settings_file) if settings_file.is_file() else None
+    for n, line in enumerate((settings_text or "").splitlines(), 1):
+        line = line.split("#", 1)[0].strip()
+        if not line:
+            continue
+        parts = [x.strip() for x in line.split("|")]
+        if len(parts) != 3 or not SETTING_RE.fullmatch(parts[0]) or parts[1] not in SETTING_TYPES or not parts[2]:
+            problems.append(f"settings.md line {n} is not '<key> | folder|text | <label>'")
+            continue
+        pack.settings.append({"key": parts[0], "type": parts[1], "label": parts[2][:200]})
     keys = {x["key"] for x in pack.schedules}
     follows = {x["key"]: str(x["spec"]["schedule"]) for x in pack.schedules if x["spec"]["type"] == "after"}
     for x in pack.schedules:  # "after <key>" must name another schedule of this pack, with no loop
@@ -178,6 +210,10 @@ class PackStore:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         with closing(self._conn()) as db, db:
             db.executescript(SCHEMA)
+            try:  # Milestone 9: settings per pack (added to a table Milestone 8 made)
+                db.execute("ALTER TABLE packs ADD COLUMN settings TEXT NOT NULL DEFAULT '{}'")
+            except sqlite3.OperationalError:
+                pass  # already there
 
     def _conn(self) -> sqlite3.Connection:
         db = sqlite3.connect(self.db_path, timeout=10)
@@ -222,6 +258,43 @@ class PackStore:
     def set_enabled(self, pack_id: str, enabled: bool) -> bool:
         with closing(self._conn()) as db, db:
             return bool(db.execute("UPDATE packs SET enabled = ? WHERE id = ?", (int(enabled), pack_id)).rowcount)
+
+    def settings(self, pack_id: str) -> dict[str, str]:
+        with closing(self._conn()) as db:
+            row = db.execute("SELECT settings FROM packs WHERE id = ?", (pack_id,)).fetchone()
+        return json.loads(row[0]) if row else {}
+
+    def set_settings(self, pack_id: str, values: Any) -> dict[str, str]:
+        """Only I fill in settings (Packs page). Raises PackError."""
+        pack = self.get(pack_id)
+        if pack is None or pack_id not in self.states():
+            raise PackError("this pack is not installed")
+        if not isinstance(values, dict):
+            raise PackError("bad settings")
+        known = {s["key"]: s for s in pack.settings}
+        out = self.settings(pack_id)
+        for key, value in values.items():
+            spec = known.get(key)
+            if spec is None:
+                raise PackError(f"unknown setting {key}")
+            if not isinstance(value, str) or len(value) > MAX_SETTING or any(ord(c) < 32 for c in value):
+                raise PackError(f"{spec['label']}: bad value")
+            value = value.strip()
+            if spec["type"] == "folder" and value:
+                folder = Path(value)
+                # Checked before is_dir(): never touch a network share, also not written as //host/share
+                # or reached through a mapped drive letter or a symbolic link (review M9). islink() never follows.
+                if not folder.is_absolute() or str(folder).startswith("\\\\") or _remote_drive(folder) \
+                        or any(os.path.islink(p) for p in (folder, *folder.parents)) or not folder.is_dir():
+                    raise PackError(f"{spec['label']}: give the full path of a folder that exists on this PC")
+                resolved = folder.resolve()
+                if str(resolved).startswith("\\\\") or _remote_drive(resolved):
+                    raise PackError(f"{spec['label']}: give the full path of a folder that exists on this PC")
+                value = str(resolved)
+            out[key] = value
+        with closing(self._conn()) as db, db:
+            db.execute("UPDATE packs SET settings = ? WHERE id = ?", (json.dumps(out), pack_id))
+        return out
 
     def set_keys(self, pack_id: str, action_keys: list[str]) -> None:
         with closing(self._conn()) as db, db:
@@ -301,11 +374,11 @@ def _install_parts(packs: PackStore, gate: Any, schedules: Any, pack: Pack) -> d
     for s in pack.schedules:  # added switched off: I turn on what I want
         spec = {"type": "interval", "minutes": 60} if s["spec"]["type"] == "after" else s["spec"]  # set below
         ids[s["key"]] = schedules.add(s["name"], s["kind"], s["target"], s["task"], spec, enabled=False,
-                                      pack=pack_id, pack_key=s["key"])["id"]
+                                      pack=pack_id, pack_key=s["key"], notify=s["notify"])["id"]
     for s in pack.schedules:  # second pass: "after <key>" becomes the id of that schedule
         if s["spec"]["type"] == "after":
             schedules.update(ids[s["key"]], s["name"], s["kind"], s["target"], s["task"],
-                             {"type": "after", "schedule": ids[str(s["spec"]["schedule"])]})
+                             {"type": "after", "schedule": ids[str(s["spec"]["schedule"])]}, notify=s["notify"])
     return {"pack": pack_id, "roles": len(pack.roles), "teams": len(pack.teams),
             "connectors": len(pack.connectors), "schedules": len(pack.schedules), "suggested_auto": suggested_auto}
 

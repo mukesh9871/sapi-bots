@@ -19,7 +19,8 @@ boxes and ✅ marks there show what is built and tested.
 | | 6. Approvals, log and budgets | Done |
 | | 7. Teams | Done |
 | | 8. Scheduler and pack format | Ready to test |
-| 3. Instruction packs | 9 to 13. Routines, social media, jobs, software team, video | Not started |
+| 3. Instruction packs | 9. Routine automation | Ready to test (the week-long check is yours) |
+| | 10 to 13. Social media, jobs, software team, video | Not started |
 
 ## What it does today
 
@@ -106,6 +107,22 @@ boxes and ✅ marks there show what is built and tested.
   - The **Sample pack** shows the format: a planner and a note taker, a team, an "add a
     note" connector (writes to `data/outbox/sample-notes.md`, through Approvals) and a
     morning schedule.
+- **Routine automation pack** (install it on the Packs page): four starter routines,
+  installed switched off.
+  - **Morning briefing** (every day 07:30): web news in ten bullets, and it tells you.
+  - **Weekly summary** (Mondays 09:00): what the hub did this week, from the activity
+    log and schedule runs.
+  - **Stretch reminder** (every day 15:00): a short reminder that pops up in the window.
+  - **Tidy my folder** (Fridays 16:00): sorts the loose files of one folder into
+    subfolders by type. Set the folder on the Packs page. The tidier sees only that
+    folder, and every move goes through Approvals (Ask until you choose Auto).
+- **Routines in plain words:** in Schedules, describe a routine ("every weekday at 8,
+  brief me on AI news and tell me") and press **Draft it**. The hub fills in who does
+  it, the steps and the time. You check it, and nothing is saved until you press Save.
+  The form also shows which outside actions the chosen role may take and the approval
+  rule for each.
+- **Tell me when done:** a schedule with this ticked shows its result in the window
+  (and as a desktop notice, if you allow it) when it finishes. Good for reminders.
 - **Terminal chat** for quick use without the window.
 
 ## Requirements
@@ -192,7 +209,7 @@ Everything stays on your PC. None of these are committed to git.
 | Roles | `packs/local/roles/<id>.md` (readable, safe to edit by hand) |
 | Each role's working folder | `projects/role-<id>/` |
 | Team templates | `packs/local/teams/<id>.md` (readable, safe to edit by hand) |
-| Packs | `packs/<id>/` (the sample pack is part of the app; which ones are installed is in `data/hub.db`) |
+| Packs | `packs/<id>/` (the sample and routines packs are part of the app; which ones are installed, and their settings, are in `data/hub.db`) |
 | Schedules and their runs | `data/hub.db` (SQLite) |
 | Each team run's working folder (its files and `REPORT.md`) | `projects/team-<run>/` |
 | Approval rules, inbox, activity log, team runs (steps, log, questions) | `data/hub.db` (SQLite; the activity log is append-only) |
@@ -252,7 +269,9 @@ packs/<id>/roles/*.md       roles (same format as your own)
 packs/<id>/teams/*.md       teams (a plain role id means this pack's role)
 packs/<id>/connectors/*.py  connectors (modules that list ACTIONS, like hub/connectors/)
 packs/<id>/rules.md         suggested rules, one per line: "<action id>: ask|never|auto [cap N]"
+packs/<id>/settings.md      settings you fill in on the Packs page: "<key> | folder|text | <label>"
 packs/<id>/schedules/*.md   schedules: header "name", "run: role <id>" or "run: team <id>",
+                            "notify: yes" (tell me when done),
                             "when: daily 08:00" (or weekly mon,fri 09:30 / every 90 minutes /
                             file C:\folder / after <another schedule file name>);
                             the task below the header
@@ -339,7 +358,7 @@ hub/
     teams.py           team template files: read, check, save, delete (Milestone 7)
     runs.py            team runs in data/hub.db: steps, log, questions, restart handling
     orchestrator.py    runs a team: lead tools, member steps, pause, stop, review gate, budgets
-    packs.py           packs: read, install, switch off, remove (Milestone 8)
+    packs.py           packs: read, install, switch off, remove, settings (Milestones 8, 9)
   scheduler/
     schedules.py       schedules and their runs in data/hub.db; when they run next
     runner.py          the scheduler loop: due runs, missed runs, file and after triggers
@@ -355,6 +374,8 @@ scripts/usage_test.py  plan-usage measurement
 scripts/make_shortcut.ps1  creates the desktop shortcut
 tests/               pytest suite (offline and live)
 docs/REQUIREMENTS.md full specification and milestones
+packs/sample/         sample pack (Milestone 8)
+packs/routines/       routine automation pack (Milestone 9)
 start.bat            starts the chat window
 ```
 
@@ -379,7 +400,7 @@ In PowerShell, use `$env:HUB_LIVE='1'` instead of `set HUB_LIVE=1`.
 - Offline tests use a temporary database and a fake Claude session. They never touch
   your real `data/chats.db`.
 - Live tests use your subscription (a few short messages, mostly on Haiku).
-- Current result: 429 passed (401 offline, 28 live).
+- Current result: 447 passed (417 offline, 30 live).
 
 ## Working rules for development
 
