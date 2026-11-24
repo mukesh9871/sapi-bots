@@ -75,7 +75,8 @@ def test_rename_keeps_id_and_copy_and_delete(store):  # G-AGENT-2: create, edit,
     ({"tools": "WebSearch"}, "bad tool list"),
     ({"name": ""}, "name"), ({"name": "a\nb"}, "name"), ({"name": "x" * 41}, "name"),
     ({"name": "x\r---"}, "name"), ({"name": "a\tb"}, "name"),  # review M5 round 3
-    ({"model": "gpt"}, "model"),
+    ({"model": "-x"}, "model"), ({"model": "Opus 5"}, "model"),  # R-MODEL-1: a name, never an option
+    ({"effort": "huge"}, "effort"),
     ({"instructions": "  "}, "empty"),
 ])
 def test_bad_roles_are_refused(store, change, problem):

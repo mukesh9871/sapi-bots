@@ -57,8 +57,8 @@ class Action:
         return {"type": "object", "properties": props}
 
     def fill(self, args: Any, context: dict[str, str]) -> Any:
-        """Milestone 12: fields marked {"hub": "folder"} or {"hub": "agent"} get the agent's working folder
-        or name from the hub. Whatever the agent sent for them is dropped, so it can never point an
+        """Milestone 12: fields marked {"hub": "folder"}, {"hub": "agent"} or {"hub": "pack"} (Milestone 15)
+        get the agent's working folder, name or pack from the hub. Whatever the agent sent for them is dropped, so it can never point an
         action at another folder or pose as another role."""
         if not isinstance(args, dict):
             return args

@@ -65,7 +65,7 @@ def track(company="Acme", title="Test engineer", url="https://jobs.example.com/1
 def test_jobs_pack_is_complete():
     pack = read_pack("jobs", PACKS_DIR / "jobs")
     assert pack.problem == "" and pack.views == [{"action": "jobs_tools.view_tracker", "label": "Tracker"}]
-    assert pack.roles == ["application-filler", "fact-checker", "job-lead", "job-scout", "resume-writer"]
+    assert pack.roles == ["application-filler", "fact-checker", "job-lead", "job-scout", "resume-writer", "setup"]
 
 
 def test_install_roles_and_rules(env):

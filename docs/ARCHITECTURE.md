@@ -80,6 +80,35 @@ Key points:
 - **Crash safety:** "started" is logged before a connector runs. After a crash, unfinished calls are marked "unknown" and never re-run (N-REL-3).
 - **Buttons only for me:** actions marked `ui_only` appear as row buttons on a pack's table and are never offered to a role.
 
+## Models and connectors from Claude Code (Milestone 15)
+
+At start-up the hub asks Claude Code two things, without sending a message: which models this login
+may use (`get_server_info`, R-MODEL-1) and which claude.ai connectors it has (`get_mcp_status`,
+G-CONN-1). Both lists are kept in `data/` for the next start (`hub/chat/models.py`,
+`hub/chat/connectors_claude.py`).
+
+```mermaid
+flowchart LR
+    R[Role lists a connector tool] --> O{build_options}
+    O -->|no connector tools| S[strict MCP: nothing outside]
+    O -->|connector tools| C[claude.ai connectors load<br/>others denied by name]
+    C --> W[wait until connected]
+    W --> T{tool}
+    T -->|read-only| A[runs]
+    T -->|acting| G[gate.decide_external]
+    G -->|Auto| A2[runs, logged]
+    G -->|Ask| I[Approvals: the agent waits]
+    I -->|approved| A2
+    I -->|rejected or 30 min| D[refused]
+```
+
+Claude Code runs connector calls itself, so the gate decides and logs instead of running them:
+`PermissionResultAllow` lets an approved call go ahead unchanged, and the `PostToolUse` and
+`PostToolUseFailure` hooks write its outcome. An approval waits only while the agent waits. After a
+restart, such an item is withdrawn, never left pending.
+
+Telemetry stays off (N-SEC-2). With it off, Claude Code lists only the current models.
+
 ## Packs
 
 A pack is a folder in `packs/<id>/`. Installing it never changes the engine or another pack (G-PACK-2).
@@ -92,7 +121,8 @@ packs/<id>/
   connectors/*.py  modules with ACTIONS (files starting with "_" are helpers, never loaded as connectors)
   rules.md         suggested approval rules (a suggested Auto is installed as Ask)
   schedules/*.md   default schedules (installed switched off)
-  settings.md      settings I fill in on the Packs page (secrets go to Windows Credential Manager)
+  settings.md      settings: "<key> | type | label [| required, chat]" (secrets go to Windows Credential Manager)
+  roles/setup.md   optional set-up role: asks in chat for the settings marked "chat" (G-PACK-4)
 ```
 
 | Pack | Milestone | Design notes |

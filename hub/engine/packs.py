@@ -11,7 +11,10 @@ A pack is a folder in packs/<id>/ that bundles one type of work:
     packs/<id>/rules.md         suggested approval rules, one per line: "<action id>: ask|never|auto [cap N]"
     packs/<id>/schedules/*.md   default schedules (header: name, run, when, notify; the body is the task)
     packs/<id>/settings.md      settings I fill in on the Packs page, one per line:
-                                "<key> | folder|file|text|longtext|secret | <label>"
+                                "<key> | folder|file|text|longtext|secret | <label> [| required, chat]"
+                                (G-PACK-4: "required" ones are shown first; "chat" ones a pack's set-up
+                                role may fill in from what I tell it in chat: only plain text, never a
+                                path, an allow-list, a mode, a command or a login)
                                 (file: a local .md or .txt file, for example a master resume)
                                 A secret (a platform login) is kept in Windows Credential Manager through
                                 keyring: never in hub.db, a file, a log or an agent's context (hard rule).
@@ -58,6 +61,9 @@ def _remote_drive(folder: Path) -> bool:
         return False
     import ctypes
     return ctypes.windll.kernel32.GetDriveTypeW(folder.drive + "\\") == 4  # DRIVE_REMOTE
+
+
+on_setting_change: "Callable[[str, str, str, str], None] | None" = None  # (pack, key, value, agent): the log
 
 
 def setting(pack_id: str, key: str) -> str:
@@ -236,10 +242,16 @@ def read_pack(pack_id: str, path: Path) -> Pack:
         if not line:
             continue
         parts = [x.strip() for x in line.split("|")]
-        if len(parts) != 3 or not SETTING_RE.fullmatch(parts[0]) or parts[1] not in SETTING_TYPES or not parts[2]:
-            problems.append(f"settings.md line {n} is not '<key> | folder|text | <label>'")
+        flags = {f.strip() for f in parts[3].split(",") if f.strip()} if len(parts) == 4 else set()
+        if len(parts) not in (3, 4) or not SETTING_RE.fullmatch(parts[0]) or parts[1] not in SETTING_TYPES \
+                or not parts[2] or flags - {"required", "chat"}:
+            problems.append(f"settings.md line {n} is not '<key> | folder|text | <label> [| required, chat]'")
             continue
-        pack.settings.append({"key": parts[0], "type": parts[1], "label": parts[2][:200]})
+        if "chat" in flags and parts[1] not in ("text", "longtext"):
+            problems.append(f"settings.md line {n}: only text settings can be set in chat (never a {parts[1]})")
+            continue
+        pack.settings.append({"key": parts[0], "type": parts[1], "label": parts[2][:200],
+                              "required": "required" in flags, "chat": "chat" in flags})
     keys = {x["key"] for x in pack.schedules}
     follows = {x["key"]: str(x["spec"]["schedule"]) for x in pack.schedules if x["spec"]["type"] == "after"}
     for x in pack.schedules:  # "after <key>" must name another schedule of this pack, with no loop

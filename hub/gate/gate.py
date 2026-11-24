@@ -29,6 +29,10 @@ DEFAULT_PACK = "local"  # until packs exist (Milestone 8), every rule belongs to
 REPEAT_WINDOW = 24 * 3600  # N-REL-3: an identical call within this time is treated as a repeat
 
 
+def _runs_in_claude(_payload: dict) -> str:
+    raise ActionError("this connector call is run by Claude after approval, not by the hub")
+
+
 def _normal(payload: dict) -> dict:
     return {k: v.replace("\r\n", "\n").strip() if isinstance(v, str) else v for k, v in payload.items()
             if not (isinstance(v, str) and not v.strip())}
@@ -58,6 +62,48 @@ class Gate:
         self.paused = paused
         self.lookup = lookup
         self._decide = threading.Lock()  # see call(): one decision at a time
+        # G-CONN-3: calls to claude.ai connector tools. Claude Code runs those itself once allowed, so
+        # the gate decides and logs, and a held call waits in the agent's turn until I decide.
+        self.external: dict[str, Action] = {}  # action id -> its stand-in Action (rules, log, inbox)
+        self.waiting: set[int] = set()  # inbox items an agent is waiting on right now
+        self.approved_calls: dict[int, str] = {}  # inbox item -> the call id its approval logged
+
+    def find(self, action_id: str) -> Action | None:
+        return self.external.get(action_id) or self.lookup(action_id)
+
+    def external_action(self, server_label: str, server_slug: str, tool: str) -> Action:
+        """A stand-in for a connector tool: rules are set per (connector, tool), Ask by default (G-APPR-3)."""
+        import json
+        action = Action(connector=f"claudeai_{server_slug}"[:60], name=tool, platform=f"connector {server_label}"[:80],
+                        description=f"{server_label}: {tool}", fields={}, run=_runs_in_claude, acting=True,
+                        show=lambda payload: json.dumps(payload, indent=1, ensure_ascii=False)[:6000],
+                        show_label="Will call exactly")
+        self.external[action.id] = action
+        return action
+
+    def decide_external(self, action: Action, payload: Any, agent: str, pack: str = DEFAULT_PACK) -> GateResult:
+        """G-CONN-3: the same rules as call() (Never, Ask, Auto with cap, pause, repeats), without running
+        anything: decision "auto" carries the logged call id in .text, "held" the inbox item."""
+        clean = payload if isinstance(payload, dict) else {"value": repr(payload)[:1000]}
+        with self._decide:
+            decided = self._decide_call(action, clean, agent, pack)
+        if isinstance(decided, GateResult):
+            if decided.decision == "held" and decided.item_id in self.waiting:
+                # Review M15: another agent already waits on exactly this call. Sharing its item would let
+                # one agent's stop cancel the other's approval, so this one is refused at once.
+                return GateResult(f"This exact action is already waiting for the user as item {decided.item_id}. "
+                                  "Do not try it again.", True, "blocked", decided.item_id)
+            return decided
+        return GateResult(decided, False, "auto")
+
+    def finish_external(self, call_id: str, action: Action, payload: dict, agent: str, pack: str, ok: bool,
+                        detail: str, item_id: int | None = None) -> None:
+        """The outcome Claude Code reported for an allowed connector call (G-LOG-1)."""
+        decision = "approved" if item_id else "auto"
+        self.store.log(call_id, agent, pack, action.platform, action.id, payload, decision,
+                       "done" if ok else "failed", detail[:1000])
+        if item_id:
+            self.store.finish(item_id, "done" if ok else "failed", detail[:1000])
 
     def _run(self, action: Action, payload: dict, agent: str, pack: str, decision: str,
              call_id: str | None = None, note: str = "") -> tuple[bool, str]:
@@ -151,6 +197,8 @@ class Gate:
         item = self.store.approval(item_id)
         if item is None:
             raise KeyError("item not found")
+        if item["action_id"] in self.external or item["action_id"].startswith("claudeai_"):
+            return self._approve_external(item)
         action = self.lookup(item["action_id"])
         if action is None:
             raise ValueError("this connector is no longer installed")
@@ -194,6 +242,29 @@ class Gate:
         self.store.finish(item_id, "done" if ok else "failed", result)
         return {"ok": ok, "result": result, "edited": edited}
 
+    def _approve_external(self, item: dict) -> dict[str, Any]:
+        """G-CONN-3: lets the waiting agent's connector call go ahead, exactly as shown (no edits: the
+        connector's own fields are not the hub's to change). Claude Code runs it; its outcome is logged
+        when it reports back."""
+        item_id = item["id"]
+        action = self.external.get(item["action_id"])
+        if action is None or item_id not in self.waiting:
+            raise ValueError("the agent that asked has stopped waiting (or the app restarted): ask it again")
+        rule = self.store.rule(item["pack"], item["platform"], action.name)
+        if rule["mode"] == "never":
+            raise ValueError("the rule for this action is now Never: change it in Settings to approve this")
+        call_id = str(uuid.uuid4())
+        with self._decide:
+            # Recorded first (review M15): the waiting agent polls without this lock and must never see
+            # "running" before it can find the approval.
+            self.approved_calls[item_id] = call_id
+            if not self.store.claim(item_id, "running"):
+                self.approved_calls.pop(item_id, None)
+                raise ValueError("this item was already decided")
+            self.store.log(call_id, item["agent"], item["pack"], action.platform, action.id, item["payload"],
+                           "approved", "started", f"inbox item {item_id}")
+        return {"ok": True, "result": "Approved: the agent goes on and Claude runs the call.", "edited": False}
+
     def reject(self, item_id: int) -> None:
         item = self.store.approval(item_id)
         if item is None:
@@ -222,6 +293,9 @@ class Gate:
         for c in calls:
             self.store.log(c["call_id"], c["agent"], c["pack"], c["platform"], c["action_id"], c["payload"],
                            c["decision"], "unknown", "the app stopped while this ran: check whether it happened")
+        for item in self.store.approvals("pending"):  # G-CONN-3: no agent waits on these after a restart
+            if item["action_id"].startswith("claudeai_") and self.store.claim(item["id"], "withdrawn"):
+                self.store.finish(item["id"], "withdrawn", "the app restarted while the agent waited: ask it again")
         for item in self.store.approvals("running"):
             if self.store.item_outcome(item["id"]) == "done":  # it finished; only the inbox row lagged behind
                 self.store.finish(item["id"], "done", "finished (recorded after a restart)")

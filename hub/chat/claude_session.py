@@ -51,6 +51,7 @@ from claude_agent_sdk import (
 
 from hub.chat.personalities import system_prompt
 from hub import connectors
+from hub.chat import connectors_claude, models
 from hub.engine import roles
 
 # The web tools are pre-approved on purpose, so the SDK's "callback shadowed" warning is expected.
@@ -135,6 +136,7 @@ def all_transcript_ids() -> list[str]:
 # ---- roles (Milestone 5) --------------------------------------------------------------
 
 ROLE_DENY = DENIED_TOOLS + WEB_TOOLS + list(roles.FILE_TOOLS)  # everything a role may lack
+CONNECTOR_WAIT = 30 * 60  # seconds an agent waits for my decision on a connector call (G-CONN-3)
 
 # Input keys of the file tools (checked against the bundled CLI 2.1.321 tool schemas, SDK 0.2.180).
 FILE_TOOL_KEYS = {
@@ -257,19 +259,19 @@ def _gated_tool(action: Any, gate: Any, agent: str, pack: str = "local", folder:
     @tool(f"{action.connector}_{action.name}", action.description, action.schema())
     async def handler(args: dict[str, Any]) -> dict[str, Any]:
         # G-PACK-1: a pack role's actions follow that pack's rules ("local" for my own roles).
-        args = action.fill(args, {"folder": str(folder or ""), "agent": agent})  # Milestone 12: hub-filled fields
+        args = action.fill(args, {"folder": str(folder or ""), "agent": agent, "pack": pack})  # hub-filled fields
         result = await asyncio.to_thread(gate.call, action.id, args, agent, pack)  # SQLite + connector: off the loop
         return {"content": [{"type": "text", "text": result.text}], "is_error": result.is_error}
     return handler
 
 
-def _readonly_tool(action: Any, agent: str = "", folder: Any = None) -> Any:
+def _readonly_tool(action: Any, agent: str = "", folder: Any = None, pack: str = "local") -> Any:
     """An in-process tool for a read-only connector action (G-TOOL-2): it changes nothing outside the
     app, so it needs no approval; its input is still checked. Milestone 9."""
     @tool(f"{action.connector}_{action.name}", action.description, action.schema())
     async def handler(args: dict[str, Any]) -> dict[str, Any]:
         try:
-            args = action.fill(args, {"folder": str(folder or ""), "agent": agent})  # Milestone 12
+            args = action.fill(args, {"folder": str(folder or ""), "agent": agent, "pack": pack})  # Milestone 12
             result = await asyncio.to_thread(action.run, action.clean(args))
             return {"content": [{"type": "text", "text": str(result)}], "is_error": False}
         except Exception as exc:  # a bad input or a failed read: the agent is told plainly
@@ -282,6 +284,7 @@ def build_options(
     personality: str = "straight",
     custom_prompt: str | None = None,
     model: str | None = None,
+    effort: str | None = None,
     web_enabled: bool = True,
     resume: str | None = None,
     cwd: Path | None = None,
@@ -301,11 +304,20 @@ def build_options(
     "team" server, and `max_turns` overrides the role's own budget (the lead's run budget)."""
     servers: dict[str, Any] = {}
     turn_limit = max_turns
+    claude_tools: dict[str, dict[str, Any]] = {}  # G-CONN-2: claude.ai connector tools this role lists
     if role is not None:
         if role.problem:
             raise ValueError(f"role {role.id} cannot run: {role.problem}")  # never run a broken file
         builtin = [t for t in role.tools if t in roles.TOOL_CATALOG]
-        acts = [connectors.get(t) for t in role.tools if t not in roles.TOOL_CATALOG]
+        on = connectors_claude.tools()
+        claude_tools = {t: on[t] for t in role.tools if t in on}
+        if any(t.startswith(connectors_claude.PREFIX) and t not in on for t in role.tools):
+            raise ValueError(f"role {role.id} lists a connector that is not switched on")
+        if claude_tools and set(role.tools) & set(WEB_TOOLS):
+            raise ValueError("a role with connector tools cannot also have web tools")  # review M15: no leak path
+        if any(not c["read_only"] for c in claude_tools.values()) and gate is None:
+            raise ValueError("acting connector tools need the approval gate")  # never run them ungated
+        acts = [connectors.get(t) for t in role.tools if t not in roles.TOOL_CATALOG and t not in claude_tools]
         if None in acts:
             raise ValueError(f"role {role.id} lists a connector that is not installed")
         if any(a.acting for a in acts) and gate is None:
@@ -313,14 +325,15 @@ def build_options(
         if acts:
             servers["hub"] = create_sdk_mcp_server("hub", tools=[
                 _gated_tool(a, gate, role.name, role.pack, folder or role.folder) if a.acting
-                else _readonly_tool(a, role.name, folder or role.folder) for a in acts])
+                else _readonly_tool(a, role.name, folder or role.folder, role.pack) for a in acts])
         if team_tools:
             servers["team"] = create_sdk_mcp_server("team", tools=list(team_tools))
-        allowed = builtin + [a.tool_name for a in acts] + [f"mcp__team__{t.name}" for t in team_tools]
+        allowed = builtin + [a.tool_name for a in acts] + [f"mcp__team__{t.name}" for t in team_tools] + list(claude_tools)
         tools = builtin  # `tools` covers built-ins only; the hub server holds only the listed actions
         denied = [t for t in ROLE_DENY if t not in builtin]
         cwd = folder or role.folder
         model = role.model or model
+        effort = role.effort or effort  # R-MODEL-2: the role's own effort, else the Settings one
         turn_limit = max_turns or role.max_turns  # G-BUDGET-1: the reply stops with "error_max_turns"
     else:
         allowed = tools = list(WEB_TOOLS) if web_enabled else []
@@ -330,6 +343,14 @@ def build_options(
     # Web tools and gated actions are pre-approved: the hook still checks them, and the approval
     # gate decides each action. File tools are not, so their calls also reach layer 4.
     pre_approved = [t for t in allowed if t in WEB_TOOLS or t.startswith(("mcp__hub__", "mcp__team__"))]
+    # G-CONN-2: a read-only connector tool runs freely; any other goes through the gate (permission_check).
+    pre_approved += [t for t, c in claude_tools.items() if c["read_only"]]
+    # Connectors this session does not use stay out of its context altogether (and are denied by name).
+    used = {f"mcp__{connectors_claude.slug(c['server'])}" for c in claude_tools.values()}
+    denied = denied + [prefix for prefix in connectors_claude.server_prefixes() if prefix not in used]
+    agent = role.name if role else "chat"
+    pack = role.pack if role else "local"
+    calls: dict[str, tuple] = {}  # tool_use_id -> (call id, stand-in action, payload, inbox item or None)
 
     def refusal(tool: str, tool_input: dict[str, Any]) -> str | None:
         if tool not in allowed:
@@ -348,26 +369,96 @@ def build_options(
         return {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
                                        "permissionDecisionReason": reason}}
 
-    async def permission_check(tool: str, tool_input: dict[str, Any], _ctx: ToolPermissionContext):
+    async def permission_check(tool: str, tool_input: dict[str, Any], ctx: ToolPermissionContext):
         # Layer 4: anything that reaches the prompt stage is checked again.
         reason = refusal(tool, tool_input)
-        return PermissionResultAllow() if reason is None else PermissionResultDeny(message=reason)
+        if reason is not None:
+            return PermissionResultDeny(message=reason)
+        if tool in claude_tools and not claude_tools[tool]["read_only"]:
+            return await gated_connector_call(tool, tool_input, getattr(ctx, "tool_use_id", None) or "")
+        return PermissionResultAllow()
+
+    async def gated_connector_call(tool: str, tool_input: dict[str, Any], use_id: str):
+        """G-CONN-3: a connector tool that changes something. The gate decides like for any acting tool;
+        under Ask this turn waits for my decision in Approvals, like Claude Code's own permission prompt."""
+        c = claude_tools[tool]
+        action = gate.external_action(c["label"], connectors_claude.slug(c["server"]), c["tool"])
+        result = await asyncio.to_thread(gate.decide_external, action, tool_input, agent, pack)
+        if result.decision == "auto":
+            calls[use_id] = (result.text, action, tool_input, None)
+            return PermissionResultAllow()
+        if result.decision != "held" or result.item_id is None:
+            return PermissionResultDeny(message=result.text)
+        item_id = result.item_id
+        gate.waiting.add(item_id)
+
+        def approved():  # the approval is recorded before the item turns "running" (gate._approve_external)
+            if item_id in gate.approved_calls:
+                item = gate.store.approval(item_id)
+                calls[use_id] = (gate.approved_calls.pop(item_id), action, item["payload"], item_id)
+                return PermissionResultAllow(updated_input=item["payload"])
+            return None
+
+        try:
+            for _ in range(int(CONNECTOR_WAIT / 1.0)):
+                ok = approved()
+                if ok:
+                    return ok
+                item = gate.store.approval(item_id)
+                if (item["status"] if item else "gone") not in ("pending", "running"):
+                    return PermissionResultDeny(message="The user rejected this action. Do not try it again.")
+                await asyncio.sleep(1.0)
+            gate.waiting.discard(item_id)  # no approval can start from here on
+            if not gate.withdraw(item_id, "the agent stopped waiting", pack):
+                ok = approved()  # approved in the very last moment (review M15): let it go ahead
+                if ok:
+                    return ok
+            return PermissionResultDeny(message="The user did not answer in time. Ask them, then try again.")
+        finally:
+            gate.waiting.discard(item_id)
+            with gate._decide:  # the approval sets, claims and rolls back under this lock (review M15)
+                late = gate.approved_calls.pop(item_id, None)
+                committed = (gate.store.approval(item_id) or {}).get("status") == "running"
+            if late is not None and committed and not any(c[3] == item_id for c in calls.values()):
+                # Approved at the very moment the turn stopped: nothing will run, so say so (review M15)
+                await asyncio.to_thread(gate.finish_external, late, action, gate.store.approval(item_id)["payload"],
+                                        agent, pack, False, "the agent stopped before running it", item_id)
+            else:
+                # The turn was stopped while it waited, or it ended: never leave the item pending (review M15)
+                gate.withdraw(item_id, "the agent stopped waiting", pack)
+
+    async def connector_done(hook_input: dict[str, Any], tool_use_id: str | None, _ctx: Any) -> dict[str, Any]:
+        """G-LOG-1: the outcome of an allowed acting connector call, from Claude Code."""
+        use_id = tool_use_id or hook_input.get("tool_use_id") or ""
+        if use_id in calls:
+            call_id, action, payload, item_id = calls.pop(use_id)
+            failed = hook_input.get("hook_event_name") == "PostToolUseFailure"
+            detail = str(hook_input.get("error") if failed else hook_input.get("tool_response"))
+            await asyncio.to_thread(gate.finish_external, call_id, action, payload, agent, pack, not failed,
+                                    detail, item_id)
+        return {}
 
     return ClaudeAgentOptions(
         tools=tools,                         # layer 1: available built-ins
         allowed_tools=pre_approved,
         disallowed_tools=denied,             # layer 2: removed and denied by name
-        hooks={"PreToolUse": [HookMatcher(matcher=None, hooks=[confine], on_failure="block")]},
+        hooks={"PreToolUse": [HookMatcher(matcher=None, hooks=[confine], on_failure="block")],
+               "PostToolUse": [HookMatcher(matcher=None, hooks=[connector_done])],
+               "PostToolUseFailure": [HookMatcher(matcher=None, hooks=[connector_done])]},
         can_use_tool=permission_check,
         permission_mode="default",           # never "bypassPermissions"
         system_prompt=role_prompt(role, folder) if role else system_prompt(personality, custom_prompt),
         setting_sources=[],                  # N-SEC-5: no user/project settings or CLAUDE.md
         skills=[],
-        mcp_servers=servers,                 # only our own gated server, never the user's
-        strict_mcp_config=True,              # ignore any MCP servers in the user's config
+        mcp_servers=servers,                 # our own gated servers
+        # G-CONN-1 (N-SEC-5 relaxed, 2026-11-24): only a role that lists connector tools gets my claude.ai
+        # connectors, and only the listed tools of connectors I switched on are usable (the rest denied by
+        # name above). Plain chat and every other role stay closed to outside MCP servers.
+        strict_mcp_config=not claude_tools,
         max_turns=turn_limit,
         cwd=str(cwd),
         model=model,
+        effort=models.effort_for(model, effort),  # R-MODEL-2: only a level this model supports
         resume=resume,
         include_partial_messages=True,       # F-CHAT-1: word-by-word streaming
         # N-SEC-2: no telemetry, error reporting or auto-update traffic from the child CLI.
@@ -477,6 +568,22 @@ class ChatSession:
                 kernel32.SetConsoleCtrlHandler(None, False)
         else:
             await self.client.connect()
+        if not self.options.strict_mcp_config:
+            await self._wait_for_connectors()
+
+    async def _wait_for_connectors(self, seconds: float = 15.0) -> None:
+        """G-CONN-2: Claude Code connects claude.ai connectors in the background after it starts. A first
+        message sent before that finds no connector tools (tested: the model then makes an answer up), so
+        a session whose role uses connectors waits until none is still connecting (about 1.5 s)."""
+        for _ in range(int(seconds / 0.5)):
+            try:
+                status = await self.client.get_mcp_status()
+            except Exception:
+                return  # an older CLI without status: go on, the tools may still arrive
+            servers = status.get("mcpServers", []) if isinstance(status, dict) else []
+            if servers and all(s.get("status") != "pending" for s in servers):
+                return
+            await asyncio.sleep(0.5)
 
     async def _reconnect(self) -> None:
         """Safety net: the child died anyway. Start a new one that resumes this session (keeps context)."""

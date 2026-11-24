@@ -48,7 +48,7 @@ def env(tmp_path, monkeypatch):
 def test_social_pack_is_complete():  # P-SOC roles, schedules, suggested rules
     pack = read_pack("social", PACKS_DIR / "social")
     assert pack.problem == ""
-    assert pack.roles == ["analytics-reporter", "content-writer", "publisher", "social-lead", "trend-analyst"]
+    assert pack.roles == ["analytics-reporter", "content-writer", "publisher", "setup", "social-lead", "trend-analyst"]
     assert {s["name"] for s in pack.schedules} == {"Daily trend report", "Weekly content calendar",
                                                   "Weekly analytics summary"}
     rules = {r["action"]: r["mode"] for r in pack.rules}

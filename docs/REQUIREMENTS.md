@@ -57,6 +57,9 @@ The app must let me chat, pick a personality, keep history, and search the web; 
 4. **F-CHAT-4:** ✅ A Stop button to cancel a reply that is still generating.
 5. **F-CHAT-5:** (Later) Regenerate the last reply, and edit then resend my last message. Both need the session rewound by one turn, so they are not in version 1.
 6. **F-CHAT-6:** ✅ Choose the model (for example a faster model for quick chat, a stronger model for hard questions), limited to what my plan allows.
+7. **R-MODEL-1:** ✅ The model choices come from Claude Code itself (the same list as its own model picker), read at start-up without sending a message, and kept for the next start. Only models on that list can be chosen; without any list, the plan default, Haiku, Sonnet and Opus. With telemetry off (N-SEC-2), Claude Code offers the current models only (decision 2026-11-24).
+8. **R-MODEL-2:** ✅ An effort level (low, medium, high, xhigh, max) can be chosen next to the model, offered only for models that support it.
+9. **R-MODEL-3:** ✅ A role can have its own model and effort; left blank, it uses the ones from Settings.
 
 **Personality**
 
@@ -131,11 +134,19 @@ The platform is one general engine: agents with roles, teams, tools, schedules a
 2. **G-BUDGET-1:** ✅ Each task and each team has a budget (maximum turns and maximum agents working at once). The run stops and reports when the budget is reached.
 3. **G-BUDGET-2:** ✅ A global switch pauses all automation, so chatting stays available when my subscription limit is nearly used.
 
+**Connectors from my Claude account**
+
+1. **G-CONN-1:** ✅ The hub lists the connectors on my claude.ai account (claude.ai, Settings, Connectors) and I switch on the ones it may use. New ones are connected on claude.ai, not rebuilt in the hub. Only claude.ai connectors: never my Claude Code plugins or local MCP servers, which would bring my personal Claude Code settings into the hub (decision 2026-11-24).
+2. **G-CONN-2:** ✅ A role can list tools of a switched-on connector like any other tool. A session gets connectors only if its role lists their tools, and only those tools are usable.
+3. **G-CONN-3:** ✅ A connector tool that only reads runs freely. Every other one follows its approval rule (Ask by default): under Ask the agent waits for my decision, the approval shows exactly the call, and the outcome is written to the activity log.
+4. **G-CONN-4:** ✅ Packs reuse connectors where Claude already has one (for example a mail connector for job applications) instead of carrying their own login and code.
+
 **Instruction packs**
 
 1. **G-PACK-1:** ✅ A pack is a folder that bundles roles, a team template, the connectors it needs, default approval rules and default schedules for one type of work.
 2. **G-PACK-2:** ✅ Installing, switching off or removing a pack never changes the engine or other packs.
 3. **G-PACK-3:** ✅ A pack can run plain background code (no Claude) every few seconds, for watching and bookkeeping such as a run queue. Anything it does outside the app goes through the approval gate, it starts nothing new while automation is paused, and a pack whose work is still running cannot be switched off or removed.
+4. **G-PACK-4:** ✅ Set-up stays small: a pack marks the few settings it cannot work without (shown first on the Packs page), and its set-up role asks for the rest in chat and saves the answers. Chat may fill in only plain text settings the pack marks for it: never a path, an allow-list, a mode, a command or a login. Every such change is in the activity log.
 
 ## Instruction packs (specific types)
 
@@ -230,8 +241,9 @@ The app should start quickly, stay private on my PC, and fail with clear message
 | N-MAINT-1 ✅ | Maintainability | Settings (personality, model, toggles) live in one readable config file. |
 | N-MAINT-2 | Maintainability | Code is small and commented, so I can change it myself. |
 | N-PORT-1 | Portability | Runs on Windows 10 or 11; ideally also on macOS and Linux with no code changes. |
+| N-PORT-2 | Portability | Later: the bot runs in a container. Not built yet. When planned, keep in mind: the Claude Code sign-in inside the container, Windows Credential Manager (keyring) has no Windows store there, the pipeline pack's Windows jobs and taskkill, local folders and the GPU must be mounted, and the server must still be reachable only by me. |
 | N-SEC-4 ✅ | Security | The local server accepts requests only from its own window: a random token created at each launch, plus Origin and Host checks, so a website open in my browser cannot talk to the bot. |
-| N-SEC-5 ✅ | Security | Chat runs in its own empty working folder, each team in its own project folder, and neither loads my Claude Code settings, memory files or skills, so my coding setup cannot change the bot and the bot cannot see my projects. |
+| N-SEC-5 ✅ | Security | Chat runs in its own empty working folder, each team in its own project folder, and neither loads my Claude Code settings, memory files or skills, so my coding setup cannot change the bot and the bot cannot see my projects. Relaxed on 2026-11-24 in one controlled way (G-CONN-1..3): a role that lists tools of a claude.ai connector I switched on gets that connector, and nothing else of my setup. |
 | N-PERF-3 ✅ | Speed | Only the open chat keeps a live Claude Code process; idle ones are closed, and reopening a chat resumes its session. |
 | N-SEC-6 | Security | Platform logins and keys are kept in the operating system's credential store (Windows Credential Manager), never in config files, logs or chat, and are never shown to an agent; connectors use them on the agent's behalf. |
 | N-SEC-7 | Security | Text that an agent reads from a web page, job listing, comment or file is treated as information, never as an instruction; an acting tool call still has to pass its approval rule. |
@@ -404,5 +416,12 @@ Build in three phases, each usable on its own. Phase 1 is Milestones 1 to 4 (the
 **Milestone 14: Pipeline manager pack**
 
 - [ ] My channel repos render from the queue one after another for a few days, including at least one run of 12 hours or more, with the next item starting by itself. (Built and tested offline with stand-in repos: approvals pinned to the exact command, serial and parallel slots, one GPU run at a time, retry then flag, a run that survives the hub and is picked up later, time limit and quiet notice, stopping a run with everything it started. Setting up your real repos and the multi-day run are yours to do.)
+
+**Milestone 15: Models, connectors and chat set-up**
+
+- [x] The model list matches what Claude Code offers my login (with telemetry off), with effort per model and per role.
+- [x] My claude.ai connectors are listed; a role uses a switched-on connector's tool, read-only tools freely and others through Approvals.
+- [x] Pack set-up asks only for required settings; the set-up role fills in the rest from chat, never paths, modes, commands or logins.
+- [ ] The job pack sends applications through a mail connector. (Needs a mail connector connected on claude.ai first: then its real tools can be checked and the pack's own SMTP code removed.)
 
 **Done means:** each phase is used daily for a week with no lost data, no charge on an Anthropic API account, no action taken outside my approval rules, and no crashes. The order of packs in Phase 3 can change.

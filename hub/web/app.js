@@ -13,6 +13,7 @@ const els = {
   chatList: $("chat-list"), chatListEmpty: $("chat-list-empty"), menu: $("chat-menu"),
   settingsBtn: $("open-settings"), settingsDialog: $("settings-dialog"), settingsForm: $("settings-form"),
   talkTo: $("talk-to"), personalityBox: $("personality-box"), modelBox: $("model-box"), webBox: $("web-box"),
+  effort: $("effort"), effortBox: $("effort-box"),
   rolesBtn: $("open-roles"), rolesDialog: $("roles-dialog"), roleForm: $("role-form"), roleList: $("role-list"),
   approvalsBtn: $("open-approvals"), approvalsBadge: $("approvals-badge"), approvalsDialog: $("approvals-dialog"),
   activityBtn: $("open-activity"), activityDialog: $("activity-dialog"), usageBar: $("usage-bar"),
@@ -218,7 +219,7 @@ function showRoleControls() {
   els.talkTo.disabled = currentChatId !== null || (!!turn && turn.chatId === null && turnVisible());
   els.talkTo.title = currentChatId !== null ? "A chat keeps the role it started with. Press New chat to talk to another." : "";
   const role = !!currentRole;
-  els.personalityBox.hidden = role; els.modelBox.hidden = role; els.webBox.hidden = role;
+  els.personalityBox.hidden = role; els.modelBox.hidden = role; els.webBox.hidden = role; els.effortBox.hidden = role;
   els.editCustom.hidden = role || settings.personality !== "custom";
   const r = currentRole ? roleById(currentRole) : null;
   els.empty.textContent = currentRole ? `Give ${r ? r.name : "this role"} a task.` : "Ask me anything.";
@@ -614,11 +615,51 @@ async function saveSettings(patch) {
   applySettings(data.settings);
 }
 
+// ---------- models (R-MODEL-1..3): the list comes from Claude Code, as in its own model picker ----------
+let modelList = { models: [], default: null, source: "builtin" };
+
+async function loadModels() {
+  try { modelList = await api("GET", "/api/models"); } catch { return; } // keep what is shown
+  if (settings) applySettings(settings);
+}
+
+const modelEntry = (value) => (value ? modelList.models.find((m) => m.value === value) : modelList.default) || null;
+
+function defaultLabel(first) { // "Plan default (Opus 5.5)" when Claude Code said what that is
+  const d = modelList.default;
+  const name = d && d.description ? d.description.split("·")[0].trim() : "";
+  return name ? `${first} (${name})` : first;
+}
+
+function fillModels(select, value, first) {
+  const opts = [new Option(first, "")];
+  for (const m of modelList.models) {
+    const o = new Option(m.name, m.value);
+    o.title = m.description;
+    opts.push(o);
+  }
+  if (value && !modelList.models.some((m) => m.value === value)) opts.push(new Option(`${value} (not in your plan's list)`, value));
+  select.replaceChildren(...opts);
+  select.value = value || "";
+}
+
+// Effort levels of the model chosen (for "" the plan default, or `fallback` for a role's "Settings" choice).
+function fillEfforts(select, model, value, first, fallback) {
+  const entry = model ? modelEntry(model) : (fallback !== undefined ? modelEntry(fallback) : modelList.default);
+  const levels = entry ? entry.efforts : ["low", "medium", "high", "xhigh", "max"];
+  const opts = [new Option(first, "")].concat(levels.map((e) => new Option(e, e)));
+  select.replaceChildren(...opts);
+  select.disabled = !!entry && levels.length === 0;
+  select.title = select.disabled ? "This model has no effort setting" : "How much Claude thinks before it answers";
+  select.value = levels.includes(value) ? value : "";
+}
+
 function applySettings(s) {
   settings = s;
   els.personality.value = s.personality;
   els.editCustom.hidden = !!currentRole || s.personality !== "custom";
-  els.model.value = s.model;
+  fillModels(els.model, s.model, defaultLabel("Plan default"));
+  fillEfforts(els.effort, s.model, s.effort, "Default");
   els.web.checked = s.web_enabled;
   applyTheme(s.theme);
 }
@@ -659,8 +700,16 @@ els.personality.onchange = () => {
   quickSave({ personality: p }); // F-PERS-3: applies from the next message
 };
 els.editCustom.onclick = openCustomDialog;
-els.model.onchange = () => quickSave({ model: els.model.value });
+els.model.onchange = () => {
+  fillEfforts(els.effort, els.model.value, els.effort.value, "Default"); // a level the new model lacks goes back to Default
+  quickSave({ model: els.model.value, effort: els.effort.value });
+};
+els.effort.onchange = () => quickSave({ effort: els.effort.value });
 els.web.onchange = () => quickSave({ web_enabled: els.web.checked });
+
+$("set-model").onchange = () => fillEfforts($("set-effort"), $("set-model").value, $("set-effort").value, "Default");
+$("role-model").onchange = () => fillEfforts($("role-effort"), $("role-model").value, $("role-effort").value,
+  "Default from Settings", settings.model);
 
 // ---------- Settings page (M3 check 3) ----------
 const promptBoxes = {}; // personality -> textarea
@@ -683,7 +732,8 @@ function buildPromptEditors() {
 function openSettings() {
   $("set-bot-name").value = settings.bot_name;
   $("set-avatar").value = settings.avatar;
-  $("set-model").value = settings.model;
+  fillModels($("set-model"), settings.model, defaultLabel("Plan default"));
+  fillEfforts($("set-effort"), settings.model, settings.effort, "Default");
   $("set-theme").value = settings.theme;
   $("set-web").checked = settings.web_enabled;
   for (const [key, ta] of Object.entries(promptBoxes)) ta.value = settings.prompts[key] || builtinPrompts[key];
@@ -704,7 +754,8 @@ els.settingsForm.onsubmit = async (e) => {
   const custom = $("set-custom").value;
   const patch = {
     bot_name: $("set-bot-name").value, avatar: $("set-avatar").value,
-    model: $("set-model").value, theme: $("set-theme").value, web_enabled: $("set-web").checked,
+    model: $("set-model").value, effort: $("set-effort").value, theme: $("set-theme").value,
+    web_enabled: $("set-web").checked,
     prompts, custom_prompt: custom,
   };
   if (!custom.trim() && settings.personality === "custom") patch.personality = "straight";
@@ -777,7 +828,8 @@ function editRole(id) {
   const r = id ? roleById(id) : null;
   editingRole = r ? r.id : null;
   $("role-name").value = r ? r.name : "";
-  $("role-model").value = r ? r.model : "";
+  fillModels($("role-model"), r ? r.model : "", "Default from Settings");
+  fillEfforts($("role-effort"), r ? r.model : "", r ? r.effort || "" : "", "Default from Settings", settings.model);
   const tools = r ? r.tools : ["WebSearch", "WebFetch"]; // a new role starts with web tools only
   for (const [name, cb] of Object.entries(roleBoxes)) cb.checked = tools.includes(name);
   $("role-instructions").value = r ? r.instructions : "";
@@ -807,7 +859,7 @@ function roleError(err) { const box = $("role-error"); box.textContent = err; bo
 async function saveRole() { // returns the saved role, or null
   if (!els.roleForm.reportValidity()) return null;
   const body = {
-    name: $("role-name").value, model: $("role-model").value,
+    name: $("role-name").value, model: $("role-model").value, effort: $("role-effort").value,
     tools: Object.entries(roleBoxes).filter(([, cb]) => cb.checked).map(([name]) => name),
     instructions: $("role-instructions").value,
     max_turns: Number($("role-turns").value),
@@ -1464,6 +1516,8 @@ async function loadPacks() {
     const menu = document.createElement("menu");
     const btn = (label, cls, fn) => { const b = document.createElement("button"); b.type = "button"; b.className = cls; b.textContent = label; b.onclick = fn; menu.append(b); };
     if (pk.installed && pk.enabled) for (const v of pk.views || []) btn(`Open ${v.label}`, "ghost", () => openView(pk, v));
+    // G-PACK-4: the rest of the set-up happens in chat, with the pack's own set-up role
+    if (pk.installed && pk.enabled && pk.roles.includes("setup")) btn("Set up in chat", "", () => setupInChat(pk));
     if (!pk.installed) btn("Install", "", () => packAction(pk, "install"));
     else {
       btn(pk.enabled ? "Switch off" : "Switch on", "ghost", () => packAction(pk, "enable", { enabled: !pk.enabled }));
@@ -1475,6 +1529,12 @@ async function loadPacks() {
     if (pk.installed && pk.settings && pk.settings.length) {
       const fs = document.createElement("fieldset"); const lg = document.createElement("legend"); lg.textContent = "Settings"; fs.append(lg);
       const inputs = {};
+      // G-PACK-4: only the settings the pack cannot work without are shown at first; the rest are
+      // under "More settings" (and the chat set-up fills in the ones marked chat)
+      const more = document.createElement("details"); const moreSum = document.createElement("summary");
+      moreSum.textContent = "More settings"; more.append(moreSum);
+      const required = pk.settings.filter((x) => x.required);
+      const place = (st) => (required.length && !st.required ? more : fs);
       for (const st of pk.settings) {
         const l = document.createElement("label"); l.className = "block"; l.textContent = st.label + " ";
         const current = (pk.values || {})[st.key] || "";
@@ -1490,12 +1550,14 @@ async function loadPacks() {
             catch (err) { flash(`Could not remove it: ${err.message}.`, true); }
             loadPacks();
           };
-          l.append(inp, forget); inputs[st.key] = inp; inp.dataset.secret = "1"; fs.append(l); continue;
+          l.append(inp, forget); inputs[st.key] = inp; inp.dataset.secret = "1"; place(st).append(l); continue;
         } else { inp = document.createElement("input"); inp.maxLength = 400; inp.value = current; }
         if (st.type === "folder") inp.placeholder = "C:\\Users\\me\\Downloads";
         if (st.type === "file") inp.placeholder = "C:\\Users\\me\\Documents\\resume.md";
-        inputs[st.key] = inp; l.append(inp); fs.append(l);
+        if (st.chat) l.title = "You can also tell the set-up role this in chat";
+        inputs[st.key] = inp; l.append(inp); place(st).append(l);
       }
+      if (more.children.length > 1) fs.append(more);
       const save = document.createElement("button"); save.type = "button"; save.className = "ghost"; save.textContent = "Save settings";
       save.onclick = async () => {
         // a blank secret field means "keep it": only a typed secret is sent
@@ -1508,6 +1570,16 @@ async function loadPacks() {
     card.append(head, desc, has, rules, problem, settings, readme, menu); return card;
   }));
   $("pack-list-empty").hidden = packs.length > 0;
+}
+
+async function setupInChat(pk) { // G-PACK-4: a new chat with the pack's set-up role, already asked to start
+  if (streaming || switching || closing) { flash("Wait until the current reply has finished, then try again.", true); return; }
+  $("packs-dialog").close();
+  await els.newChat.onclick();
+  if (currentChatId !== null) { flash("Could not start a new chat: try again.", true); return; }
+  newChatRole = `${pk.id}.setup`;
+  setCurrentChat(null);
+  send(`Help me set up the ${pk.name} pack.`);
 }
 
 async function packAction(pk, action, body) {
@@ -1564,6 +1636,44 @@ $("open-packs").onclick = async () => {
   $("packs-dialog").showModal();
 };
 $("packs-close").onclick = () => $("packs-dialog").close();
+
+// ---------- G-CONN-1: claude.ai connectors the hub may use ----------
+function showConnectors(data) {
+  const on = new Set(data.on || []);
+  const list = $("connector-list");
+  list.replaceChildren(...data.servers.map((s) => {
+    const card = document.createElement("div"); card.className = "pack-card";
+    const head = document.createElement("label"); head.className = "toggle";
+    const cb = document.createElement("input"); cb.type = "checkbox"; cb.checked = on.has(s.name);
+    const reads = s.tools.filter((t) => t.read_only).length;
+    head.append(cb, ` ${s.label}`);
+    const meta = document.createElement("div"); meta.className = "muted small";
+    meta.textContent = `${s.status || "unknown"} · ${s.tools.length} tools (${reads} only read, ${s.tools.length - reads} act through Approvals)`;
+    const names = document.createElement("div"); names.className = "small";
+    names.textContent = s.tools.map((t) => t.name + (t.read_only ? "" : " ✱")).join(", ");
+    cb.onchange = async () => {
+      const next = new Set(on); if (cb.checked) next.add(s.name); else next.delete(s.name);
+      try { await saveSettings({ connectors: [...next] }); on.clear(); next.forEach((n) => on.add(n));
+        flash(cb.checked ? `${s.label} switched on: pick its tools in a role.` : `${s.label} switched off.`); }
+      catch (err) { cb.checked = !cb.checked; flash(`Could not save: ${err.message}.`, true); }
+    };
+    card.append(head, meta, names);
+    return card;
+  }));
+  $("connector-empty").hidden = data.servers.length > 0;
+}
+$("open-connectors").onclick = async () => {
+  try { showConnectors(await api("GET", "/api/connectors")); } catch (err) { flash(`Could not load connectors: ${err.message}.`, true); return; }
+  $("connectors-dialog").showModal();
+};
+$("connectors-refresh").onclick = async () => {
+  const b = $("connectors-refresh"); b.disabled = true; b.textContent = "Refreshing…";
+  try { const d = await api("POST", "/api/connectors/refresh"); showConnectors(d);
+    flash(d.ok ? "Connector list refreshed." : "Could not reach Claude: showing the saved list.", !d.ok); }
+  catch (err) { flash(`Could not refresh: ${err.message}.`, true); }
+  finally { b.disabled = false; b.textContent = "Refresh"; }
+};
+$("connectors-close").onclick = () => $("connectors-dialog").close();
 
 // Milestone 9: a "tell me" schedule (reminder, briefing) shows its result when it is done.
 let lastNotice = null, noticeBusy = false;
@@ -1649,6 +1759,8 @@ async function refreshStatus() {
     els.personality.innerHTML = data.personalities.map((p) => `<option value="${p}">${LABELS[p] || p}</option>`).join("");
     buildPromptEditors();
     applySettings(data.settings);
+    // R-MODEL-1: the saved list at once; Claude Code's fresh list is read in the background at start-up
+    loadModels(); setTimeout(loadModels, 10000);
     await loadRoles().catch(() => {}); // before the chat list, so role chats show their role
     refreshGate(); setInterval(refreshGate, 5000); // approvals badge and pause state
 

@@ -24,14 +24,16 @@ All documentation is in [docs/](docs/), listed under [Documentation](#documentat
 | | 12. Software team | Ready to test |
 | | 13. Video production | Ready to test (a real render needs ComfyUI and FFmpeg) |
 | | 14. Pipeline manager | Ready to test (set up your channel repos on the Packs page) |
+| | 15. Models, connectors and chat set-up | Ready to test (the job pack's mail connector needs a mail connector on claude.ai) |
 
 ## What it does
 
-- **Chat** in your browser with personalities, model choice, web search and saved history.
+- **Chat** in your browser with personalities, the models your plan offers (with effort), web search and saved history.
+- **Connectors:** reuse the connectors on your claude.ai account (Gmail, Drive and others once connected there).
 - **Roles and teams:** agents with only the tools you give them, working alone or as a team in their own folder.
 - **Approvals:** every action outside the app follows your rule (Auto, Ask or Never) and is written to an activity log.
 - **Schedules:** roles and teams can run tasks on a timer, when files arrive, or after another task.
-- **Packs** add a type of work: routines, social media, job applications, a software team, video production, and a pipeline manager for your video repos.
+- **Packs** (set up mostly in chat) add a type of work: routines, social media, job applications, a software team, video production, and a pipeline manager for your video repos.
 
 Details are in the [user guide](docs/USER_GUIDE.md).
 

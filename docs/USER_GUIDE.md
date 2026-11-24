@@ -9,7 +9,9 @@ How to use the Personal AI Automation Hub day to day. Set-up and start-up are in
   highlighting, a Copy button on code blocks, and a Stop button.
 - **Personalities:** Fun (witty), Straight (blunt and short), Explainer (step by step),
   or your own custom prompt. You can switch in the middle of a chat.
-- **Model choice:** plan default, Haiku, Sonnet or Opus.
+- **Model and effort:** the models your plan offers, as Claude Code lists them (the same as its
+  own model picker), and an effort level for models that support it. The list is read when the hub
+  starts and kept for the next start. A role can have its own model and effort.
 - **Web search** on or off (read-only: it never posts or sends anything). Answers that
   used the web show a folded **Sources** list with the pages it searched and read.
 - **Chat history** saved on your PC: a sidebar with every chat (newest first), search
@@ -77,6 +79,15 @@ How to use the Personal AI Automation Hub day to day. Set-up and start-up are in
     off are listed as missed, with their names. The role
     gets the file names. It can open them only if the folder is inside its own folder.
   - A scheduled chat cannot be continued or deleted while its run is still writing it.
+- **Connectors:** the **Connectors** button lists the connectors on your claude.ai account
+  (claude.ai, Settings, Connectors). Switch one on, then pick its tools in a role. Tools that only
+  read run freely. Any other tool waits for you in Approvals, and the agent waits for your answer
+  (up to 30 minutes). To add one, such as Gmail, connect it on claude.ai and press **Refresh**.
+  A role with connector tools cannot also have web search or web fetch. Switching a connector
+  on or off applies to new chats.
+- **Set up in chat:** a pack shows only the settings it needs first. **Set up in chat** opens a
+  chat with the pack's set-up role, which asks for the rest and saves your answers. Logins, folders,
+  modes and commands stay on the Packs page.
 - **Packs:** the **Packs** button lists the packs in the `packs` folder. **Install** adds
   the pack's roles, teams, connectors, approval rules and schedules. **Switch off** hides
   them and keeps the rules and schedules (they do not run while it is off). **Remove** deletes its rules, schedules and
@@ -237,6 +248,7 @@ Everything stays on your PC. None of these are committed to git.
 | Platform logins (for example the LinkedIn token) | Windows Credential Manager, under `sapi-ai-hub` (never in a file) |
 | Social demo channel output | `data/outbox/social-demo.md` |
 | A pack's own data (for example the job tracker and the tailored documents) | `data/pack-data/<pack>/` |
+| The model list and the connector list from Claude Code (copies, refreshed at start-up) | `data/models.json`, `data/connectors.json` |
 | Pipeline queue, and each run's log and result files | `data/pack-data/pipeline/queue.db` and `data/pack-data/pipeline/runs/<item>-<ask>/` |
 | Each team run's working folder (its files and `REPORT.md`) | `projects/team-<run>/` |
 | Approval rules, inbox, activity log, team runs (steps, log, questions) | `data/hub.db` (SQLite; the activity log is append-only) |

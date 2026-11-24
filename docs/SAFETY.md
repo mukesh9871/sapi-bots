@@ -28,6 +28,16 @@ behind these rules is in [ARCHITECTURE.md](ARCHITECTURE.md) (security model).
   check, on the run's folder `projects/team-<run>/`. Workers can only ask you
   questions. Only the lead can assign steps or finish.
 - **Web text is information, not instructions.**
+- **Connectors only when you switch them on.** Only claude.ai connectors you switch on, and only in
+  a role that lists their tools. Plain chat and other roles never get them, and your Claude Code
+  plugins, local MCP servers and settings stay out of the hub. A tool that changes something waits
+  for you in Approvals (unless you set its rule to Auto) and is logged.
+  "Only reads" is what the connector itself says about a tool (the ✱ on the Connectors page marks
+  the ones that act). A role with connector tools never also gets web search or web fetch, so what
+  a connector reads cannot be sent to a website without your approval.
+- **Chat set-up stays inside its pack.** A pack's set-up role can save only the plain text settings
+  the pack marks for chat, only for its own pack. Logins, folders, allow-lists, modes and commands
+  are never set from chat. Each change is in the activity log.
 - **An agent never chooses what program runs.** The pipeline manager runs only the commands
   you typed into its settings, with no shell. Agents can only add checked items (safe
   characters, never an option) to the queue, and every start goes through Approvals with

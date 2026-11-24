@@ -149,7 +149,7 @@ RENDER = {"template": "short", "shot": "shot01", "prompt": "a lighthouse at dawn
 def test_pack_reads_clean_and_installs_safe_rules(env):  # P-VID-1, P-VID-6
     tmp, ps, gate, rs, folder, comfy = env
     pack = read_pack("video", PACKS_DIR / "video")
-    assert set(pack.roles) == {"script-writer", "director", "producer", "editor"}
+    assert set(pack.roles) == {"script-writer", "director", "producer", "editor", "setup"}
     assert gate.store.rule("video", "video", "submit_script")["mode"] == "ask"
     assert gate.store.rule("video", "video", "submit_final")["mode"] == "ask"
     assert gate.store.rule("video", "comfyui", "render")["mode"] == "ask"  # suggested Auto, installed as Ask

@@ -15,6 +15,8 @@ hub/
     claude_session.py  wraps the Agent SDK client, tool limits and folder check, transcripts
     history.py         SQLite chat store, search, replay text, Markdown export
     personalities.py   built-in prompts
+    models.py          the model list from Claude Code, effort levels (Milestone 15)
+    connectors_claude.py  claude.ai connectors: list, switched on, tool names (Milestone 15)
   engine/
     roles.py           role files: read, check, save, copy, delete (Milestone 5)
     teams.py           team template files: read, check, save, delete (Milestone 7)
@@ -31,6 +33,7 @@ hub/
   connectors/
     base.py            what a connector action looks like
     demo.py            demo "post a note" acting tool
+    pack_setup.py      a pack's set-up role reads and saves its chat settings (Milestone 15)
     __init__.py        finds every connector here and in switched-on packs (no engine change)
   web/               index.html, app.css, app.js, vendor/ (marked, DOMPurify, highlight.js)
 scripts/usage_test.py  plan-usage measurement

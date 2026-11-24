@@ -35,6 +35,7 @@ from fastapi.staticfiles import StaticFiles
 from hub import config
 from hub.auth_check import LOGIN_STEPS, LoginState, check_login, scrub_billing_env, status_line
 from hub.chat.claude_session import ChatSession, all_transcript_ids, delete_transcript, transcript_exists
+from hub.chat import connectors_claude, models
 from hub.chat.history import HistoryStore
 from hub.chat.personalities import PERSONALITIES
 from hub.engine.roles import MODELS, Role, RoleError, RoleStore, catalog
@@ -109,8 +110,17 @@ def validate_settings(body: dict[str, Any], current: dict[str, Any]) -> str | No
         return "bad settings value"
     if body.get("personality") not in (None, *PERSONALITIES, "custom"):
         return "unknown personality"
-    if body.get("model") not in (None, "", "haiku", "sonnet", "opus"):
-        return "unknown model"
+    if "connectors" in body:  # G-CONN-1: names of claude.ai connectors (switched on by me only)
+        names = body["connectors"]
+        if not isinstance(names, list) or len(names) > 50 or not all(isinstance(n, str) and 0 < len(n) <= 80
+                                                                        for n in names):
+            return "bad connector list"
+    if "model" in body or "effort" in body:  # R-MODEL-1/2: a model from Claude Code's list
+        # Review M15: a value already saved is never refused (the list can change under it)
+        model = "" if body.get("model") == current.get("model") else body.get("model", "")
+        wrong = models.problem(model, body.get("effort", ""))
+        if wrong:
+            return wrong
     if body.get("theme") not in (None, *THEMES):
         return "unknown theme"
     if "bot_name" in body and not 0 < len(body["bot_name"].strip()) <= 40:
@@ -157,6 +167,10 @@ def create_app(token: str, port: int, *, login: LoginState | None = None,
     # Milestone 8 (G-PACK-1): installed, switched-on packs add roles, teams and connectors.
     pack_store = pack_store or PackStore(db_path=gate.store.path)
     packs_mod.active = pack_store  # pack connectors read their settings through it (Milestone 9)
+    # G-PACK-4: a setting a pack's set-up role saved from chat is written to the activity log
+    packs_mod.on_setting_change = lambda pack, key, value, agent: gate.store.log(
+        str(__import__("uuid").uuid4()), agent or "set-up", pack, "hub", "pack_setup.save_setting",
+        {"key": key, "value": value[:500]}, "chat", "done", f"setting {key} saved from chat")
     connectors.pack_dirs = role_store.pack_dirs = teams.pack_dirs = pack_store.enabled_dirs
     schedule_store = schedule_store or ScheduleStore(gate.store.path)
     left = run_store.stop_unfinished()  # a restart never resumes a team by itself
@@ -175,6 +189,10 @@ def create_app(token: str, port: int, *, login: LoginState | None = None,
 
         # In the background, so a slow CLI never delays the window opening (N-PERF-1).
         login_task = asyncio.create_task(refresh_login()) if check_login_on_start else None
+        # R-MODEL-1: the model list from Claude Code, in the background (no message, no usage)
+        models_task = asyncio.create_task(models.refresh()) if check_login_on_start else None
+        # G-CONN-1: and which claude.ai connectors this login has
+        connectors_task = asyncio.create_task(connectors_claude.refresh()) if check_login_on_start else None
         if not check_login_on_start:
             state.login_checked = True
         scheduler.start()  # G-SCHED-1: runs while the app is on; missed runs are listed (G-SCHED-2)
@@ -182,6 +200,10 @@ def create_app(token: str, port: int, *, login: LoginState | None = None,
         yield
         if login_task:
             login_task.cancel()
+        if models_task:
+            models_task.cancel()
+        if connectors_task:
+            connectors_task.cancel()
         await services.close()  # what a service started outside (a long render) keeps running
         await scheduler.close()  # stops scheduled role tasks (a scheduled team stops with the runs below)
         live = list(state.runs.values())
@@ -319,7 +341,8 @@ def create_app(token: str, port: int, *, login: LoginState | None = None,
         if chat and chat.get("role"):
             # G-AGENT-3: a role chat runs as the role (its prompt, tools, folder and model).
             # Personality and the web toggle do not apply. A blank role model uses Settings.
-            return {"role": usable_role(chat["role"]), "model": cfg["model"] or None, "gate": gate}
+            return {"role": usable_role(chat["role"]), "model": cfg["model"] or None, "effort": cfg["effort"] or None,
+                    "gate": gate}
         personality = cfg["personality"] if cfg["personality"] in PERSONALITIES else "straight"
         if cfg["personality"] == "custom" and cfg["custom_prompt"].strip():
             prompt = cfg["custom_prompt"]
@@ -329,6 +352,7 @@ def create_app(token: str, port: int, *, login: LoginState | None = None,
             "personality": personality,
             "custom_prompt": prompt or None,
             "model": cfg["model"] or None,
+            "effort": cfg["effort"] or None,
             "web_enabled": bool(cfg["web_enabled"]),
         }
 
@@ -638,17 +662,34 @@ def create_app(token: str, port: int, *, login: LoginState | None = None,
         if body is None:
             return None
         return (body.get("name", ""), body.get("model", ""), body.get("tools", []), body.get("instructions", ""),
-                body.get("max_turns", 30))
+                body.get("max_turns", 30), body.get("effort", ""))
 
     @app.get("/api/roles")
     async def list_roles() -> dict[str, Any]:
         return {"roles": [r.to_dict() for r in role_store.list()], "tools": catalog(), "models": list(MODELS)}
+
+    @app.get("/api/connectors")
+    async def list_connectors() -> dict[str, Any]:
+        """G-CONN-1: my claude.ai connectors (as Claude Code lists them) and which ones the hub may use."""
+        return {**connectors_claude.current(), "on": connectors_claude.switched_on()}
+
+    @app.post("/api/connectors/refresh")
+    async def refresh_connectors() -> dict[str, Any]:
+        ok = await connectors_claude.refresh()
+        return {"ok": ok, **connectors_claude.current(), "on": connectors_claude.switched_on()}
+
+    @app.get("/api/models")
+    async def list_models() -> dict[str, Any]:
+        """R-MODEL-1: the models this login may use, as Claude Code lists them (or the saved copy)."""
+        return models.current()
 
     @app.post("/api/roles")
     async def create_role(request: Request):
         fields = role_fields(await read_json(request))
         if fields is None:
             return _bad("bad request")
+        if models.problem(fields[1], fields[5]):  # R-MODEL-1: a model from Claude Code's list
+            return _bad(models.problem(fields[1], fields[5]))
         try:
             return {"role": role_store.save(None, *fields).to_dict()}
         except RoleError as exc:
@@ -660,6 +701,10 @@ def create_app(token: str, port: int, *, login: LoginState | None = None,
         fields = role_fields(await read_json(request))
         if fields is None:
             return _bad("bad request")
+        old = role_store.get(role_id)
+        model = "" if old and fields[1] == old.model else fields[1]  # an unchanged model is never refused
+        if models.problem(model, fields[5]):
+            return _bad(models.problem(model, fields[5]))
         try:
             return {"role": role_store.save(role_id, *fields).to_dict()}
         except RoleError as exc:
@@ -691,7 +736,7 @@ def create_app(token: str, port: int, *, login: LoginState | None = None,
         from hub import connectors
         items = []
         for item in gate.store.approvals("pending"):
-            action = connectors.get(item["action_id"])
+            action = gate.find(item["action_id"])  # also a claude.ai connector call (G-CONN-3)
             exact = ""
             if action is not None and action.show is not None:  # Milestone 10: the text the connector builds
                 try:
@@ -816,7 +861,8 @@ def create_app(token: str, port: int, *, login: LoginState | None = None,
         roles = {rid: role_store.get(rid) for rid in {team.lead, team.reviewer, *team.members} if rid}
         run = new_run(team, roles, task, run_store, gate,
                       # A blank role model uses the Settings model, as in role chats (R-AUTH-10).
-                      lambda **kw: ChatSession(ctrl_c_shield=False, model=config.load()["model"] or None, **kw),
+                      lambda **kw: ChatSession(ctrl_c_shield=False, model=config.load()["model"] or None,
+                                               effort=config.load()["effort"] or None, **kw),
                       roles_mod.ROLE_WORK_ROOT)
         state.runs[run.run_id] = run
         handle = run.run_task = asyncio.create_task(run.run())  # kept: a strong reference, awaited at shutdown
@@ -906,7 +952,8 @@ def create_app(token: str, port: int, *, login: LoginState | None = None,
         scheduled_chats.add(chat["id"])  # nobody else writes or deletes it while this runs
         store.rename(chat["id"], f"Scheduled: {name}"[:80])
         store.add_message(chat["id"], "user", task)
-        session = ChatSession(ctrl_c_shield=False, role=role, model=config.load()["model"] or None, gate=gate)
+        session = ChatSession(ctrl_c_shield=False, role=role, model=config.load()["model"] or None,
+                              effort=config.load()["effort"] or None, gate=gate)
         reply, status, why = [], "done", ""
         try:
             await session.connect()

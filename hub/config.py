@@ -23,7 +23,9 @@ CONFIG_PATH = PROJECT_ROOT / "config.json"
 DEFAULTS: dict[str, Any] = {
     "personality": "straight",  # fun | straight | explainer | custom
     "custom_prompt": "",
-    "model": "",  # "" = plan default
+    "model": "",  # "" = plan default, else a model from Claude Code's list (R-MODEL-1)
+    "effort": "",  # "" = the model's own default, else low | medium | high | xhigh | max (R-MODEL-2)
+    "connectors": [],  # G-CONN-1: claude.ai connectors I switched on for the hub (by name)
     "web_enabled": True,
     "bot_name": "Bot",  # F-PERS-4
     "avatar": "🤖",  # F-PERS-4: an emoji or up to 4 letters
@@ -34,12 +36,12 @@ DEFAULTS: dict[str, Any] = {
 }
 
 # Only these keys can be changed from the window (keeps junk out of the file).
-EDITABLE = {"personality", "custom_prompt", "model", "web_enabled", "bot_name", "avatar", "theme", "prompts",
+EDITABLE = {"personality", "custom_prompt", "model", "effort", "connectors", "web_enabled", "bot_name", "avatar", "theme", "prompts",
             "automation_paused"}
 
 # Expected type per key. Wrong types (from a hand edit) fall back to the default.
 TYPES: dict[str, type] = {
-    "personality": str, "custom_prompt": str, "model": str, "web_enabled": bool, "port": int,
+    "personality": str, "custom_prompt": str, "model": str, "effort": str, "connectors": list, "web_enabled": bool, "port": int,
     "bot_name": str, "avatar": str, "theme": str, "prompts": dict, "automation_paused": bool,
 }
 

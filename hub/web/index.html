@@ -22,6 +22,7 @@
       <!-- Milestone 8: schedules and triggers (G-SCHED-1, G-SCHED-2), packs (G-PACK-1, G-PACK-2) -->
       <button type="button" id="open-schedules" class="ghost" title="Tasks that run on a schedule or a trigger">Schedules <span id="missed-badge" class="badge" hidden>0</span></button>
       <button type="button" id="open-packs" class="ghost" title="Install, switch off or remove instruction packs">Packs</button>
+      <button type="button" id="open-connectors" class="ghost" title="Connectors from your claude.ai account the hub may use">Connectors</button>
       <input type="search" id="search" placeholder="Search chats" aria-label="Search chats">
       <ul id="chat-list" aria-label="Past chats"></ul>
       <div id="chat-list-empty" class="muted small" hidden>No chats yet.</div>
@@ -41,12 +42,10 @@
           </label>
           <button type="button" id="edit-custom" class="ghost" hidden>Edit prompt</button>
           <label id="model-box">Model
-            <select id="model">
-              <option value="">Plan default</option>
-              <option value="haiku">Haiku (fast)</option>
-              <option value="sonnet">Sonnet</option>
-              <option value="opus">Opus (strongest)</option>
-            </select>
+            <select id="model"><option value="">Plan default</option></select>
+          </label>
+          <label id="effort-box">Effort
+            <select id="effort"><option value="">Default</option></select>
           </label>
           <label class="toggle" id="web-box"><input type="checkbox" id="web"> Web search</label>
           <button type="button" id="export" class="ghost" hidden title="Save this chat as a Markdown file">Export</button>
@@ -114,12 +113,10 @@
         <legend>Defaults</legend>
         <div class="row">
           <label>Model
-            <select id="set-model">
-              <option value="">Plan default</option>
-              <option value="haiku">Haiku (fast)</option>
-              <option value="sonnet">Sonnet</option>
-              <option value="opus">Opus (strongest)</option>
-            </select>
+            <select id="set-model"><option value="">Plan default</option></select>
+          </label>
+          <label>Effort
+            <select id="set-effort"><option value="">Default</option></select>
           </label>
           <label>Theme
             <select id="set-theme">
@@ -185,12 +182,10 @@
         <div id="role-pack-note" class="hint" hidden></div>
         <label class="block">Name <input id="role-name" maxlength="40" required></label>
         <label class="block">Model
-          <select id="role-model">
-            <option value="">Default from Settings</option>
-            <option value="haiku">Haiku (fast)</option>
-            <option value="sonnet">Sonnet</option>
-            <option value="opus">Opus (strongest)</option>
-          </select>
+          <select id="role-model"><option value="">Default from Settings</option></select>
+        </label>
+        <label class="block">Effort
+          <select id="role-effort"><option value="">Default from Settings</option></select>
         </label>
         <fieldset>
           <legend>Tools it may use</legend>
@@ -328,6 +323,18 @@
     <div id="pack-list"></div>
     <div id="pack-list-empty" class="muted small" hidden>No packs found in the packs folder.</div>
     <menu><button type="button" id="packs-close" class="ghost">Close</button></menu>
+  </dialog>
+  <dialog id="connectors-dialog" class="wide">
+    <h2>Connectors</h2>
+    <p class="hint">These are the connectors on your claude.ai account (claude.ai, Settings, Connectors). Switch one on
+      to let roles use its tools: pick them in the role editor. Tools that only read run freely. Every other tool waits
+      for you in Approvals. To add a connector, such as Gmail, connect it on claude.ai, then press Refresh.</p>
+    <div id="connector-list"></div>
+    <div id="connector-empty" class="muted small" hidden>No claude.ai connectors found. Connect one on claude.ai, then press Refresh.</div>
+    <menu>
+      <button type="button" id="connectors-refresh" class="ghost">Refresh</button>
+      <button type="button" id="connectors-close" class="ghost">Close</button>
+    </menu>
   </dialog>
   <dialog id="teams-dialog" class="huge">
     <div class="roles-layout">

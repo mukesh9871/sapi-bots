@@ -52,7 +52,8 @@ def test_routines_pack_has_the_starter_routines():  # P-ROUT-2
     assert {s["name"] for s in pack.schedules} == {"Morning briefing", "Weekly summary", "Stretch reminder",
                                                   "Tidy my folder"}
     assert pack.settings == [{"key": "tidy_folder", "type": "folder",
-                              "label": "Folder the tidier may sort (for example your Downloads folder)"}]
+                              "label": "Folder the tidier may sort (for example your Downloads folder)",
+                              "required": False, "chat": False}]  # G-PACK-4: a folder is never set from chat
 
 
 def test_install_gives_roles_rules_and_switched_off_schedules(env):
