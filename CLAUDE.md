@@ -25,14 +25,14 @@ Claude subscription through the Claude Agent SDK. The full specification is in
 ## Build order
 
 Work one milestone at a time, in the order given in `docs/REQUIREMENTS.md`
-(Milestones 1 to 13). Do not start a milestone until every acceptance check of
+(Milestones 1 to 14). Do not start a milestone until every acceptance check of
 the previous one passes. Tell me when a milestone is ready for me to test.
 
 - Phase 1 (Milestones 1 to 4): core chat app.
 - Phase 2 (Milestones 5 to 8): generic platform (roles, teams, approval gate,
   scheduler, log, budgets, pack format). It must know nothing about jobs,
   social media or video.
-- Phase 3 (Milestones 9 to 13): instruction packs, one per milestone.
+- Phase 3 (Milestones 9 to 14): instruction packs, one per milestone.
 
 ## Tech stack
 
@@ -57,7 +57,7 @@ hub/
 packs/             one folder per instruction pack
 data/              SQLite databases (not committed)
 projects/          team project folders (not committed)
-docs/REQUIREMENTS.md
+docs/              REQUIREMENTS.md and the other documents (architecture, guides)
 tests/
 ```
 

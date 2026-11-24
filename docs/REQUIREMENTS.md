@@ -4,14 +4,14 @@ Nov 11, 2026 · @Mukesh Kumar
 
 ## Overview and goals
 
-Build a personal AI automation hub that runs on my PC on my Claude subscription. A Grok-style chat assistant sits at the centre, a generic engine for agents, teams, schedules and approvals sits around it, and instruction packs add job applications, social media, routines, software projects and video production.
+Build a personal AI automation hub that runs on my PC on my Claude subscription. A Grok-style chat assistant sits at the centre, a generic engine for agents, teams, schedules and approvals sits around it, and instruction packs add job applications, social media, routines, software projects, video production and a pipeline manager for my video repos.
 
 **Goals**
 
 1. A fast chat window with a configurable personality (witty, blunt, or plain), local history and web search.
 2. Uses only my Claude subscription through the Claude Agent SDK, signed in with my Claude account. No Anthropic API key.
 3. A generic platform built first: roles, teams, tools, schedules, approvals, logs and budgets.
-4. Instruction packs on top of it: job applications, social media manager, routine automation, a software team, and video production with ComfyUI on my RTX 5090.
+4. Instruction packs on top of it: job applications, social media manager, routine automation, a software team, video production with ComfyUI on my RTX 5090, and a pipeline manager that runs my channel repos' video pipelines from a queue.
 5. Anything done on my behalf follows a rule I set (automatic, needs my approval, or never) and is logged.
 6. Everything runs and is stored on my own machine.
 
@@ -25,7 +25,7 @@ The work comes in three phases: the core chat app, then the generic platform, th
 | --- | --- | --- |
 | 1. Core chat app | Streaming chat, personalities, local history, web search | Voice, image and file attachments (later) |
 | 2. Generic platform | Roles, teams, tools and connectors, approvals inbox, scheduler, activity log, budgets, pack format | Running while the PC is off; cloud hosting; more than one user |
-| 3. Instruction packs | Job applications, social media manager, routine automation, software team, video production | Getting around CAPTCHAs or platform rules; automated likes, follows or comments; posting by imitating a browser |
+| 3. Instruction packs | Job applications, social media manager, routine automation, software team, video production, pipeline manager | Getting around CAPTCHAs or platform rules; automated likes, follows or comments; posting by imitating a browser |
 | All phases | Subscription only, local, single user, every outside action ruled and logged | Anthropic API key billing; sharing the app with others |
 
 ## Key constraint: subscription only, no API key
